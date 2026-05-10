@@ -17,7 +17,7 @@ export default function Home() {
     const fetchStats = async () => {
       try {
         // Fetch Cameras
-        const camRes = await fetch("http://localhost:8000/cameras");
+        const camRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/cameras`);
         let activeCount = 0;
         let totalCams = 0;
         if (camRes.ok) {
@@ -27,7 +27,7 @@ export default function Home() {
         }
 
         // Fetch History for Today
-        const histRes = await fetch("http://localhost:8000/history");
+        const histRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/history`);
         let todayAlertsCount = 0;
         if (histRes.ok) {
           const history = await histRes.json();
@@ -37,7 +37,7 @@ export default function Home() {
         }
 
         // Fetch Faces
-        const faceRes = await fetch("http://localhost:8000/faces");
+        const faceRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/faces`);
         let faceCount = 0;
         if (faceRes.ok) {
           const faces = await faceRes.json();

@@ -23,7 +23,7 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
-    fetch("http://localhost:8000/settings")
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/settings`)
       .then(res => res.json())
       .then(data => {
         setSettings(prev => ({
@@ -52,7 +52,7 @@ export default function SettingsPage() {
     setSaving(true);
     setMessage("");
     try {
-      const response = await fetch("http://localhost:8000/settings", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings)

@@ -17,7 +17,7 @@ export default function HistoryPage() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const response = await fetch("http://localhost:8000/history");
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/history`);
         if (response.ok) {
           const data = await response.json();
           setHistory(data);
@@ -120,7 +120,7 @@ export default function HistoryPage() {
                     </td>
                     <td className="p-4 font-mono text-xs text-foreground/60">{event.image_path}</td>
                     <td className="p-4 text-center">
-                      <a href={`http://localhost:8000/${event.image_path}`} target="_blank" rel="noreferrer" className="p-1.5 rounded hover:bg-white/10 text-foreground/70 hover:text-brand transition-colors inline-block">
+                      <a href={`${process.env.NEXT_PUBLIC_API_URL}/${event.image_path}`} target="_blank" rel="noreferrer" className="p-1.5 rounded hover:bg-white/10 text-foreground/70 hover:text-brand transition-colors inline-block">
                         <ImageIcon className="w-4 h-4" />
                       </a>
                     </td>

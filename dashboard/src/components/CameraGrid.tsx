@@ -36,7 +36,8 @@ export default function CameraGrid() {
     let reconnectInterval: NodeJS.Timeout;
 
     const connectWebSocket = () => {
-      ws = new WebSocket("ws://localhost:8000/ws");
+      const wsUrl = process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace("http", "ws") + "/ws" : "ws://localhost:8000/ws";
+      ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -94,7 +95,7 @@ export default function CameraGrid() {
       {!isConnected && (
         <div className="mb-4 p-3 bg-danger/20 border border-danger text-danger rounded flex items-center gap-2 text-sm">
           <WifiOff className="w-5 h-5" />
-          <span>Disconnected from Surveillance Server. Make sure the backend is running at localhost:8000. Retrying...</span>
+          <span>Disconnected from Surveillance Server. Make sure the backend is running. Retrying...</span>
         </div>
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

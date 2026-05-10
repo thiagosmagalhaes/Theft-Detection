@@ -11,7 +11,6 @@ load_dotenv()
 from ultralytics import YOLO
 import numpy as np
 import time
-import os
 from datetime import datetime
 import json
 import threading
@@ -78,7 +77,7 @@ class SettingsModel(BaseModel):
     roiPoints: list[list[int]] = []
     showHeatmap: bool = False
 
-# ... (Load settings code same as before) ...
+
 try:
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r") as f:
@@ -90,9 +89,6 @@ try:
 except Exception as e:
     current_settings = SettingsModel()
 
-# ... (Notifications code same as before, omitted for brevity, will assume you keep it or I replace whole file if needed.
-# Since replace_file_content replaces chunks, I must be careful.
-# I will output the whole file logic for clarity if I can't match blocks easily, but let's try to match blocks.)
 
 # --- Heatmap Logic ---
 heatmap_accumulator = None

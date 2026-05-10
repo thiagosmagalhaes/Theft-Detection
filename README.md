@@ -88,9 +88,14 @@ start_system.bat
 ```
 
 ### Manual Startup
-**Start Backend API:**
+**Start Backend API (Production):**
 ```bash
 py backend.py
+```
+
+**Quick WebCam Test (Standalone Demo):**
+```bash
+py standalone_demo.py
 ```
 
 **Start Frontend UI:**

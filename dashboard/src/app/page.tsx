@@ -1,8 +1,70 @@
+"use client";
+
+import { useState, useEffect } from "react";
 import CameraGrid from "@/components/CameraGrid";
 import StatsCharts from "@/components/StatsCharts";
 import { Activity, Camera, ShieldAlert, Users } from "lucide-react";
 
 export default function Home() {
+  const [stats, setStats] = useState({
+    activeCameras: "0/0",
+    todaysAlerts: "0",
+    facesTracked: "0",
+    systemLoad: "0%"
+  });
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        // Fetch Cameras
+        const camRes = await fetch("http://localhost:8000/cameras");
+        let activeCount = 0;
+        let totalCams = 0;
+        if (camRes.ok) {
+          const cams = await camRes.json();
+          totalCams = cams.length;
+          activeCount = cams.filter((c: any) => c.status === "active").length;
+        }
+
+        // Fetch History for Today
+        const histRes = await fetch("http://localhost:8000/history");
+        let todayAlertsCount = 0;
+        if (histRes.ok) {
+          const history = await histRes.json();
+          // history timestamp format YYYYMMDD_HHMMSS
+          const todayPrefix = new Date().toISOString().replace(/-/g, "").slice(0, 8);
+          todayAlertsCount = history.filter((h: any) => h.timestamp.startsWith(todayPrefix)).length;
+        }
+
+        // Fetch Faces
+        const faceRes = await fetch("http://localhost:8000/faces");
+        let faceCount = 0;
+        if (faceRes.ok) {
+          const faces = await faceRes.json();
+          faceCount = faces.length;
+        }
+
+        // Simulate dynamic system load based on active cameras
+        const load = activeCount > 0 ? Math.floor(30 + Math.random() * 20 + (activeCount * 5)) : 10;
+
+        setStats({
+          activeCameras: `${activeCount}/${totalCams}`,
+          todaysAlerts: todayAlertsCount.toString(),
+          facesTracked: faceCount.toString(),
+          systemLoad: `${load}%`
+        });
+
+      } catch (err) {
+        console.error("Stats fetch error:", err);
+      }
+    };
+
+    fetchStats();
+    // Refresh stats every 10 seconds
+    const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="max-w-7xl mx-auto pb-10">
       <header className="mb-8 flex justify-between items-end">
@@ -22,10 +84,10 @@ export default function Home() {
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {[
-          { label: "Active Cameras", value: "4/4", icon: Camera, color: "text-blue-400" },
-          { label: "Today's Alerts", value: "14", icon: ShieldAlert, color: "text-danger" },
-          { label: "Faces Tracked", value: "1,204", icon: Users, color: "text-purple-400" },
-          { label: "System Load", value: "42%", icon: Activity, color: "text-green-400" },
+          { label: "Active Cameras", value: stats.activeCameras, icon: Camera, color: "text-blue-400" },
+          { label: "Today's Alerts", value: stats.todaysAlerts, icon: ShieldAlert, color: "text-danger" },
+          { label: "Faces Tracked", value: stats.facesTracked, icon: Users, color: "text-purple-400" },
+          { label: "System Load", value: stats.systemLoad, icon: Activity, color: "text-green-400" },
         ].map((stat, i) => {
           const Icon = stat.icon;
           return (

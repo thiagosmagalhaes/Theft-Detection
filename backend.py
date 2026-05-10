@@ -1,9 +1,13 @@
 import cv2
 import asyncio
 import base64
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+import os
+from dotenv import load_dotenv
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+load_dotenv()
 from ultralytics import YOLO
 import numpy as np
 import time
@@ -33,7 +37,7 @@ app.mount("/alerts", StaticFiles(directory="alerts"), name="alerts")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,24 +95,25 @@ except Exception as e:
 # I will output the whole file logic for clarity if I can't match blocks easily, but let's try to match blocks.)
 
 # --- Heatmap Logic ---
-heatmap_accumulator = np.zeros((720, 1280), dtype=np.float32)
+heatmap_accumulator = None
 
-def update_heatmap(center_x, center_y):
+def update_heatmap(center_x, center_y, frame_shape):
     global heatmap_accumulator
+    if heatmap_accumulator is None or heatmap_accumulator.shape[:2] != frame_shape[:2]:
+        heatmap_accumulator = np.zeros(frame_shape[:2], dtype=np.float32)
     try:
         heatmap_accumulator[center_y, center_x] += 1
     except: pass
 
 def get_heatmap_overlay(frame):
     global heatmap_accumulator
+    if heatmap_accumulator is None: return frame
     msg_max = np.max(heatmap_accumulator)
     if msg_max == 0: return frame
     
     norm_heatmap = heatmap_accumulator / msg_max
     norm_heatmap = (norm_heatmap * 255).astype(np.uint8)
-    # Apply colormap
     color_map = cv2.applyColorMap(norm_heatmap, cv2.COLORMAP_JET)
-    # Overlay
     result = cv2.addWeighted(frame, 0.7, color_map, 0.3, 0)
     return result
 
@@ -116,6 +121,7 @@ def get_heatmap_overlay(frame):
 known_face_encodings = []
 known_face_names = []
 known_face_types = [] # 'blacklist' or 'whitelist'
+faces_lock = threading.Lock()
 
 def load_known_faces():
     global known_face_encodings, known_face_names, known_face_types
@@ -125,16 +131,23 @@ def load_known_faces():
         c = conn.cursor()
         c.execute("SELECT name, type, encoding FROM faces")
         rows = c.fetchall()
-        known_face_encodings = []
-        known_face_names = []
-        known_face_types = []
+        
+        temp_encodings = []
+        temp_names = []
+        temp_types = []
         for row in rows:
             name, f_type, encoding_blob = row
             encoding = pickle.loads(encoding_blob)
-            known_face_encodings.append(encoding)
-            known_face_names.append(name)
-            known_face_types.append(f_type)
+            temp_encodings.append(encoding)
+            temp_names.append(name)
+            temp_types.append(f_type)
         conn.close()
+        
+        with faces_lock:
+            known_face_encodings = temp_encodings
+            known_face_names = temp_names
+            known_face_types = temp_types
+            
         print(f"Loaded {len(known_face_names)} faces.")
     except Exception as e:
         print(f"Error loading faces: {e}")
@@ -147,9 +160,8 @@ load_known_faces()
 @app.post("/faces/register")
 async def register_face(file: UploadFile = File(...), name: str = Form(...), type: str = Form("blacklist")):
     if not FACE_REC_AVAILABLE: return {"status": "error", "message": "Face Rec not available"}
+    temp_filename = f"temp_{uuid.uuid4()}.jpg"
     try:
-        # Save temp file
-        temp_filename = f"temp_{uuid.uuid4()}.jpg"
         with open(temp_filename, "wb") as buffer:
             buffer.write(await file.read())
         
@@ -167,14 +179,15 @@ async def register_face(file: UploadFile = File(...), name: str = Form(...), typ
             conn.commit()
             conn.close()
             
-            os.remove(temp_filename)
             load_known_faces() # Reload
             return {"status": "success", "message": f"Face registered: {name}"}
         else:
-            os.remove(temp_filename)
             return {"status": "error", "message": "No face found in image"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    finally:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
 
 @app.get("/faces")
 async def get_faces():
@@ -211,8 +224,26 @@ async def save_settings(settings: SettingsModel):
     global current_settings, roi_points
     current_settings = settings
     roi_points = settings.roiPoints # Update global ROI
+    
+    from dotenv import set_key
+    env_path = ".env"
+    if not os.path.exists(env_path):
+        open(env_path, 'a').close()
+        
+    if settings.senderPassword and settings.senderPassword != "********":
+        set_key(env_path, "SMTP_PASSWORD", settings.senderPassword)
+    if settings.telegramBotToken and settings.telegramBotToken != "********":
+        set_key(env_path, "TELEGRAM_BOT_TOKEN", settings.telegramBotToken)
+        
+    safe_settings = settings.dict()
+    # Mask sensitive data in JSON
+    safe_settings["senderPassword"] = ""
+    safe_settings["telegramBotToken"] = ""
+    
     with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings.dict(), f, indent=4)
+        json.dump(safe_settings, f, indent=4)
+        
+    load_dotenv(override=True)
     return {"status": "success", "message": "Settings saved"}
 
 @app.post("/roi")
@@ -263,65 +294,7 @@ async def test_settings(settings: SettingsModel):
             
     return {"status": "success", "message": "All enabled tests sent successfully!"}
 
-# --- Face ID Logic ---
-known_face_encodings = []
-known_face_names = []
-known_face_types = [] 
 
-def load_known_faces():
-    global known_face_encodings, known_face_names, known_face_types
-    if not FACE_REC_AVAILABLE: return
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT name, type, encoding FROM faces")
-        rows = c.fetchall()
-        known_face_encodings = []
-        known_face_names = []
-        known_face_types = []
-        for row in rows:
-            name, f_type, encoding_blob = row
-            encoding = pickle.loads(encoding_blob)
-            known_face_encodings.append(encoding)
-            known_face_names.append(name)
-            known_face_types.append(f_type)
-        conn.close()
-        print(f"Loaded {len(known_face_names)} faces.")
-    except Exception as e:
-        print(f"Error loading faces: {e}")
-
-load_known_faces()
-
-@app.post("/faces/register")
-async def register_face(file: UploadFile = File(...), name: str = Form(...), type: str = Form("blacklist")):
-    if not FACE_REC_AVAILABLE: return {"status": "error", "message": "Face Rec not available"}
-    try:
-        temp_filename = f"temp_{uuid.uuid4()}.jpg"
-        with open(temp_filename, "wb") as buffer:
-            buffer.write(await file.read())
-        
-        image = face_recognition.load_image_file(temp_filename)
-        encodings = face_recognition.face_encodings(image)
-        
-        if len(encodings) > 0:
-            encoding = encodings[0]
-            encoding_blob = pickle.dumps(encoding)
-            face_id = str(uuid.uuid4())
-            
-            conn = sqlite3.connect(DB_NAME)
-            c = conn.cursor()
-            c.execute("INSERT INTO faces VALUES (?,?,?,?)", (face_id, name, type, encoding_blob))
-            conn.commit()
-            conn.close()
-            
-            os.remove(temp_filename)
-            load_known_faces()
-            return {"status": "success", "message": f"Face registered: {name}"}
-        else:
-            os.remove(temp_filename)
-            return {"status": "error", "message": "No face found in image"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 @app.get("/faces")
 async def get_faces():
@@ -657,11 +630,6 @@ def video_loop():
                                          # Normal object/person?
                                          cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 255, 0), 1)
 
-                    if run_obj_det:
-                        if model_is_specialized:
-                            # ... (Existing Specialized Logic) ...
-                            results_obj = model_obj(frame, verbose=False, conf=0.4)
-                            # ...
                         else:
                             # --- IMPROVED PRO FALLBACK LOGIC ---
                             # Use Standard YOLOv8n but filter for "Stealable" Items
@@ -720,7 +688,8 @@ def video_loop():
                                 if face_locs:
                                     encodings = face_recognition.face_encodings(rgb_face, face_locs)
                                     if encodings:
-                                        matches = face_recognition.compare_faces(known_face_encodings, encodings[0], tolerance=0.5)
+                                        with faces_lock:
+                                            matches = face_recognition.compare_faces(known_face_encodings, encodings[0], tolerance=0.5)
                                         if True in matches:
                                             match_index = matches.index(True)
                                             match_name = known_face_names[match_index]
@@ -797,7 +766,7 @@ def video_loop():
                             # --- LOITERING ---
                             center_x = int((box[0] + box[2]) / 2)
                             center_y = int((box[1] + box[3]) / 2)
-                            update_heatmap(center_x, center_y)
+                            update_heatmap(center_x, center_y, frame.shape)
                             
                             is_inside_roi = False
                             if len(roi_points) >= 3:
@@ -888,16 +857,49 @@ def trigger_alert(cam_id, cam_name, message, frame):
         print(f"Alert Error: {e}")
 
 def send_notifications(message, image_path):
-    # Quick implementation of notification sending based on current_settings
-    # This runs in a thread
     try:
         if current_settings.emailEnabled:
-            # ... (Email logic) ...
-            pass
+            sender_email = os.getenv("SENDER_EMAIL", current_settings.senderEmail)
+            sender_password = os.getenv("SMTP_PASSWORD", current_settings.senderPassword)
+            if sender_email and sender_password:
+                msg = MIMEMultipart()
+                msg['From'] = sender_email
+                msg['To'] = current_settings.receiverEmail
+                msg['Subject'] = "Theft Guard AI - Security Alert"
+                
+                body = f"ALERT: {message}\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                msg.attach(MIMEText(body, 'plain'))
+                
+                try:
+                    with open(image_path, 'rb') as f:
+                        img_data = f.read()
+                        image = MIMEImage(img_data, name=os.path.basename(image_path))
+                        msg.attach(image)
+                except Exception as img_e:
+                    print(f"Could not attach image: {img_e}")
+                
+                server = smtplib.SMTP(current_settings.smtpServer, int(current_settings.smtpPort))
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.send_message(msg)
+                server.quit()
+                print("Email notification sent.")
+
         if current_settings.telegramEnabled:
-            # ... (Telegram logic) ...
-            pass
-    except: pass
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN", current_settings.telegramBotToken)
+            chat_id = current_settings.telegramChatId
+            if bot_token and chat_id:
+                url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+                with open(image_path, 'rb') as photo:
+                    data = {"chat_id": chat_id, "caption": f"🚨 THEFT GUARD ALERT 🚨\n\n{message}"}
+                    files = {"photo": photo}
+                    resp = requests.post(url, data=data, files=files)
+                if resp.status_code == 200:
+                    print("Telegram notification sent.")
+                else:
+                    print(f"Telegram Error: {resp.text}")
+    except Exception as e:
+        print(f"Notification Error: {e}")
 
 
 @app.websocket("/ws")

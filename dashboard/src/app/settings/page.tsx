@@ -1,6 +1,85 @@
-import { Save, Bell, Mail, Send } from "lucide-react";
+"use client";
+
+import { useState, useEffect } from "react";
+import { Save, Bell, Mail, Send, Loader2, CheckCircle2 } from "lucide-react";
 
 export default function SettingsPage() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const [settings, setSettings] = useState({
+    emailEnabled: false,
+    smtpServer: "smtp.gmail.com",
+    smtpPort: "587",
+    senderEmail: "",
+    senderPassword: "",
+    receiverEmail: "",
+    telegramEnabled: false,
+    telegramBotToken: "",
+    telegramChatId: "",
+    roiPoints: [] as number[][],
+    showHeatmap: false
+  });
+
+  useEffect(() => {
+    fetch("http://localhost:8000/settings")
+      .then(res => res.json())
+      .then(data => {
+        setSettings(prev => ({
+          ...prev,
+          ...data,
+          senderPassword: data.senderPassword || "********",
+          telegramBotToken: data.telegramBotToken || "********"
+        }));
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error("Failed to fetch settings", err);
+        setLoading(false);
+      });
+  }, []);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value, type, checked } = e.target;
+    setSettings(prev => ({
+      ...prev,
+      [name]: type === "checkbox" ? checked : value
+    }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      const response = await fetch("http://localhost:8000/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings)
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setMessage("Settings saved successfully!");
+      } else {
+        setMessage(data.message || "Failed to save settings.");
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage("Network error. Make sure backend is running.");
+    } finally {
+      setSaving(false);
+      setTimeout(() => setMessage(""), 3000);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Loader2 className="w-8 h-8 animate-spin text-brand" />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto pb-10">
       <header className="mb-8">
@@ -21,13 +100,15 @@ export default function SettingsPage() {
             Receive instant photo and caption alerts directly to your Telegram app.
           </p>
 
-          <form className="space-y-4">
+          <form className="space-y-4" onSubmit={e => e.preventDefault()}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground/80">Bot Token</label>
                 <input 
                   type="password" 
-                  defaultValue="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
+                  name="telegramBotToken"
+                  value={settings.telegramBotToken}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
@@ -35,13 +116,22 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-foreground/80">Chat ID</label>
                 <input 
                   type="text" 
-                  defaultValue="-100123456789"
+                  name="telegramChatId"
+                  value={settings.telegramChatId}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <input type="checkbox" id="enable-telegram" className="rounded bg-black/40 border-glass-border text-brand" defaultChecked />
+              <input 
+                type="checkbox" 
+                id="enable-telegram" 
+                name="telegramEnabled"
+                checked={settings.telegramEnabled}
+                onChange={handleChange}
+                className="rounded bg-black/40 border-glass-border text-brand" 
+              />
               <label htmlFor="enable-telegram" className="text-sm text-foreground/80">Enable Telegram Alerts</label>
             </div>
           </form>
@@ -59,13 +149,15 @@ export default function SettingsPage() {
             Receive detailed text alerts and reports via email.
           </p>
 
-          <form className="space-y-4">
+          <form className="space-y-4" onSubmit={e => e.preventDefault()}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground/80">SMTP Server</label>
                 <input 
                   type="text" 
-                  defaultValue="smtp.gmail.com"
+                  name="smtpServer"
+                  value={settings.smtpServer}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
@@ -73,7 +165,9 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-foreground/80">Port</label>
                 <input 
                   type="number" 
-                  defaultValue={465}
+                  name="smtpPort"
+                  value={settings.smtpPort}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
@@ -81,7 +175,9 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-foreground/80">Sender Email</label>
                 <input 
                   type="email" 
-                  defaultValue="security@theftguard.com"
+                  name="senderEmail"
+                  value={settings.senderEmail}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
@@ -89,7 +185,9 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-foreground/80">Password / App Password</label>
                 <input 
                   type="password" 
-                  defaultValue="********"
+                  name="senderPassword"
+                  value={settings.senderPassword}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
@@ -97,52 +195,43 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-foreground/80">Recipient Email(s)</label>
                 <input 
                   type="text" 
-                  defaultValue="admin@company.com, manager@company.com"
+                  name="receiverEmail"
+                  value={settings.receiverEmail}
+                  onChange={handleChange}
                   className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand" 
                 />
               </div>
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <input type="checkbox" id="enable-email" className="rounded bg-black/40 border-glass-border text-brand" />
+              <input 
+                type="checkbox" 
+                id="enable-email" 
+                name="emailEnabled"
+                checked={settings.emailEnabled}
+                onChange={handleChange}
+                className="rounded bg-black/40 border-glass-border text-brand" 
+              />
               <label htmlFor="enable-email" className="text-sm text-foreground/80">Enable Email Alerts</label>
             </div>
           </form>
         </div>
 
-        {/* Global Alert Settings */}
-        <div className="glass-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded bg-danger/20 text-danger">
-              <Bell className="w-5 h-5" />
-            </div>
-            <h3 className="text-xl font-semibold">Detection Thresholds</h3>
+        <div className="flex items-center justify-between pt-4">
+          <div>
+            {message && (
+              <span className={`flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded ${message.includes('success') ? 'text-green-400 bg-green-400/10' : 'text-danger bg-danger/10'}`}>
+                {message.includes('success') && <CheckCircle2 className="w-4 h-4" />}
+                {message}
+              </span>
+            )}
           </div>
-          
-          <div className="space-y-6">
-            <div>
-              <div className="flex justify-between mb-2">
-                <label className="text-sm font-medium text-foreground/80">Minimum Confidence Score</label>
-                <span className="text-sm text-brand">75%</span>
-              </div>
-              <input type="range" min="0" max="100" defaultValue="75" className="w-full accent-brand" />
-              <p className="text-xs text-foreground/50 mt-1">Only trigger alerts if AI confidence is above this level.</p>
-            </div>
-            
-            <div>
-              <div className="flex justify-between mb-2">
-                <label className="text-sm font-medium text-foreground/80">Alert Cooldown (seconds)</label>
-                <span className="text-sm text-brand">30s</span>
-              </div>
-              <input type="range" min="0" max="120" defaultValue="30" className="w-full accent-brand" />
-              <p className="text-xs text-foreground/50 mt-1">Time to wait before sending another alert for the same camera.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end pt-4">
-          <button className="flex items-center gap-2 bg-brand hover:bg-brand/90 text-white px-6 py-2 rounded-lg font-medium transition-colors">
-            <Save className="w-4 h-4" />
-            Save Changes
+          <button 
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 bg-brand hover:bg-brand/90 disabled:opacity-50 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {saving ? "Saving..." : "Save Changes"}
           </button>
         </div>
       </div>

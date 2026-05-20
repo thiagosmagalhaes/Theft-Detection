@@ -4,11 +4,13 @@ TheftGuard AI is an advanced, enterprise-grade video surveillance and anti-theft
 
 The system leverages optimized, multi-threaded pipelines to analyze concurrent camera feeds (local webcams or RTSP network cameras) synchronously, triggering instant browser-synthesized audio sirens and sending remote alerts via Email and Telegram.
 
-![TheftGuard Dashboard Showcase](docs/dashboard.png)
+**Live Demo:** [theft-detection-dusky.vercel.app](https://theft-detection-dusky.vercel.app/)
+
+[![TheftGuard Dashboard Showcase](docs/dashboard.png)](https://theft-detection-dusky.vercel.app/)
 
 ---
 
-## 🚀 Premium System Capabilities & Key Features
+## Premium System Capabilities & Key Features
 
 ### 1. Multi-Threaded Camera Architecture
 *   **Asynchronous Frame Reading:** Captures frames independently via high-performance python threading (`ThreadedCamera`), avoiding sequential frame capture lag or UI freezes.
@@ -30,8 +32,8 @@ The system leverages optimized, multi-threaded pipelines to analyze concurrent c
 
 ### 4. Facial Recognition & Database Panel
 *   **Face ID Classification:** A dedicated, premium **Face Management** panel to upload portrait photos, register new faces, and assign categorizations:
-    *   🔴 **Blacklist:** Automatically triggers high-priority security alarms and records evidence.
-    *   🟢 **VIP Whitelist:** Identifies trusted staff, loyal clients, or VIP visitors, showing a green greeting badge.
+    *   **Blacklist:** Automatically triggers high-priority security alarms and records evidence.
+    *   **VIP Whitelist:** Identifies trusted staff, loyal clients, or VIP visitors, showing a green greeting badge.
 *   **Instant Face Database Deletion:** One-click instant SQLite deletion with automatic memory synchronization.
 
 ![Face Recognition Management](docs/faces.png)
@@ -52,14 +54,14 @@ The system leverages optimized, multi-threaded pipelines to analyze concurrent c
 
 ---
 
-## 🛠 Technical Architecture
+## Technical Architecture
 
 *   **Backend Engine:** Python 3.10+, FastAPI (Asynchronous API endpoints & WebSockets), OpenCV (Multi-threaded streaming), Ultralytics YOLOv8 (Stand-alone Pose & Object model detection), `face_recognition` (Dlib-based CNN face encodings), SQLite3 (Database storage for logs & face matrices).
 *   **Frontend Dashboard:** Next.js 14+ (App Router), React 18, Tailwind CSS, Recharts (Modern chart libraries), Lucide React (Fluent vector icons), HSL Custom Themes (Harmonious Glassmorphic Dark UI).
 
 ---
 
-## 📦 Installation Guide
+## Installation Guide
 
 ### Prerequisites
 *   Python 3.9 - 3.11
@@ -87,15 +89,15 @@ npm install
 
 ---
 
-## 🚦 Running the System
+## Running the System
 
-### ⚡ Automatic Startup (Windows)
+### Automatic Startup (Windows)
 Launch both the FastAPI service and the Next.js development server concurrently with a single click:
 ```bash
 start_system.bat
 ```
 
-### 🛠 Manual Startup
+### Manual Startup
 **1. Start the API Server & Inference Loop:**
 ```bash
 python backend.py
@@ -116,7 +118,7 @@ python standalone_demo.py
 
 ---
 
-## 🤝 Contributing 
+## Contributing 
 
 1. Fork this repository.
 2. Create your feature branch (`git checkout -b feature/CoolFeature`).
@@ -126,7 +128,7 @@ python standalone_demo.py
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
 

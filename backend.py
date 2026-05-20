@@ -37,6 +37,9 @@ except ImportError:
     PSUTIL_AVAILABLE = False
     print("psutil not installed. System resource monitor will run in simulation mode.")
 
+if not os.path.exists("alerts"):
+    os.makedirs("alerts")
+
 app = FastAPI()
 
 app.mount("/alerts", StaticFiles(directory="alerts"), name="alerts")
@@ -653,7 +656,8 @@ def check_bending(keypoints):
     vertical_dist = l_hip[1] - l_shoulder[1]
     return vertical_dist < 50
 
-# --- Updated Video Loop -def video_loop():
+# --- Updated Video Loop ---
+def video_loop():
     global latest_frame, current_settings, alert_payload, known_face_encodings, known_face_names, known_face_types, person_states
     
     print("Video Loop Başlatılıyor...") 

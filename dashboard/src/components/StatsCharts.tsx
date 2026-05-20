@@ -27,7 +27,7 @@ export default function StatsCharts() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/stats`);
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/stats`);
         if (res.ok) {
           const data = await res.json();
           const today = new Date();

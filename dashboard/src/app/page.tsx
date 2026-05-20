@@ -16,8 +16,9 @@ export default function Home() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
+        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
         // Fetch Cameras
-        const camRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/cameras`);
+        const camRes = await fetch(`${apiBaseUrl}/cameras`);
         let activeCount = 0;
         let totalCams = 0;
         if (camRes.ok) {
@@ -27,7 +28,7 @@ export default function Home() {
         }
 
         // Fetch History for Today
-        const histRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/history`);
+        const histRes = await fetch(`${apiBaseUrl}/history`);
         let todayAlertsCount = 0;
         if (histRes.ok) {
           const history = await histRes.json();
@@ -37,7 +38,7 @@ export default function Home() {
         }
 
         // Fetch Faces
-        const faceRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/faces`);
+        const faceRes = await fetch(`${apiBaseUrl}/faces`);
         let faceCount = 0;
         if (faceRes.ok) {
           const faces = await faceRes.json();

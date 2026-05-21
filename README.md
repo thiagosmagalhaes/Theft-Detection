@@ -116,6 +116,46 @@ npm run dev
 python standalone_demo.py
 ```
 
+### Docker Deployment 🐳
+
+For containerized deployment, use Docker to run the entire system with a single command:
+
+**Quick Start:**
+```bash
+# Windows (PowerShell)
+.\docker-start.ps1
+
+# Linux/Mac
+./docker-start.sh
+```
+
+**Manual Docker Commands:**
+```bash
+# Build and start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+The Docker setup includes:
+- ✅ Backend API with all dependencies (port 8000)
+- ✅ Next.js Dashboard (port 3000)
+- ✅ Persistent volumes for database, alerts, and face data
+- ✅ Health checks and automatic restarts
+- ✅ Multi-stage optimized builds
+- ✅ Stable Docker dependency set via requirements.docker.txt (without optional insightface build)
+
+**Access the containerized services:**
+- Backend API: http://localhost:8000
+- API Documentation: http://localhost:8000/docs
+- Dashboard: http://localhost:3000
+
+📖 **For detailed Docker documentation, see [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)**
+
 ---
 
 ## Contributing 

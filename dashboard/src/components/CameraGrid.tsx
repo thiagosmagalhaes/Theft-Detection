@@ -31,6 +31,18 @@ export default function CameraGrid() {
   const wsRef = useRef<WebSocket | null>(null);
   const alertTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const getApiBaseUrl = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  const getWebSocketUrl = () => {
+    try {
+      const apiUrl = new URL(getApiBaseUrl());
+      const wsProtocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+      return `${wsProtocol}//${apiUrl.host}/ws`;
+    } catch {
+      return "ws://localhost:8000/ws";
+    }
+  };
+
   const playSiren = () => {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -69,7 +81,7 @@ export default function CameraGrid() {
     let reconnectInterval: NodeJS.Timeout;
 
     const connectWebSocket = () => {
-      const wsUrl = process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace("http", "ws") + "/ws" : "ws://localhost:8000/ws";
+      const wsUrl = getWebSocketUrl();
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

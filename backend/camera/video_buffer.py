@@ -8,13 +8,13 @@ from datetime import datetime
 class VideoBuffer:
     """Circular buffer to store recent video frames for alert recording"""
     
-    def __init__(self, fps=25, duration_seconds=20):
+    def __init__(self, fps=25, duration_seconds=30):
         """
         Initialize video buffer
         
         Args:
             fps: Frames per second (default 25)
-            duration_seconds: How many seconds to buffer (default 20)
+            duration_seconds: How many seconds to buffer (default 30)
         """
         self.fps = fps
         self.duration_seconds = duration_seconds

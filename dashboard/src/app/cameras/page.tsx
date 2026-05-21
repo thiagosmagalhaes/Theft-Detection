@@ -40,6 +40,15 @@ export default function CamerasPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const getWebSocketUrl = () => {
+    try {
+      const apiUrl = new URL(apiBaseUrl);
+      const wsProtocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+      return `${wsProtocol}//${apiUrl.host}/ws`;
+    } catch {
+      return "ws://localhost:8000/ws";
+    }
+  };
 
   const fetchCameras = async () => {
     try {
@@ -70,7 +79,7 @@ export default function CamerasPage() {
       return;
     }
 
-    const wsUrl = apiBaseUrl.replace("http", "ws") + "/ws";
+    const wsUrl = getWebSocketUrl();
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

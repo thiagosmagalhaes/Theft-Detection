@@ -40,11 +40,11 @@ lock = threading.Lock()
 
 
 def get_camera_buffer(cam_data):
-    """Get video buffer frames from camera for alert recording"""
+    """Get camera capture object as live source for alert video recording"""
     try:
         cap = cam_data.get("cap")
         if cap and hasattr(cap, 'get_buffer_frames'):
-            return cap.get_buffer_frames()
+            return cap
     except Exception as e:
         print(f"Error getting camera buffer: {e}")
     return None

@@ -19,6 +19,10 @@ class ThreadedCamera:
 
         if is_index and os.name == 'nt':
             self.cap = cv2.VideoCapture(self.src_val, cv2.CAP_DSHOW)
+        elif not is_index:
+            # Force TCP transport for RTSP streams - UDP drops packets inside Docker/NAT
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;10000000"
+            self.cap = cv2.VideoCapture(self.src_val, cv2.CAP_FFMPEG)
         else:
             self.cap = cv2.VideoCapture(self.src_val)
 
@@ -36,8 +40,8 @@ class ThreadedCamera:
             self.frame = None
             fps = 25
 
-        # Initialize video buffer for last 20 seconds
-        self.video_buffer = VideoBuffer(fps=int(fps), duration_seconds=20)
+        # Keep 30 seconds so alerts can include 20s before + 10s after the event
+        self.video_buffer = VideoBuffer(fps=int(fps), duration_seconds=30)
         
         self.running = True
         self.lock = threading.Lock()

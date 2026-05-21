@@ -11,8 +11,10 @@ theft_detection.db
 
 # Security, Alerts & Configs
 alerts/
+faces/
 cameras.json
 
 # OS
 .DS_Store
 Thumbs.db
+

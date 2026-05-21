@@ -5,8 +5,8 @@
     "senderEmail": "",
     "senderPassword": "",
     "receiverEmail": "",
-    "telegramEnabled": false,
-    "telegramBotToken": "",
+    "telegramEnabled": true,
+    "telegramBotToken": "8746690648:AAH2Eq0SnE8K4eQnRQz58tELUp6zq6ODR8c",
     "telegramChatId": "",
     "roiPoints": [],
     "showHeatmap": true

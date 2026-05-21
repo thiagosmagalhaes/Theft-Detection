@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 websockets
+python-multipart
 opencv-python
 ultralytics
 numpy
@@ -8,3 +9,4 @@ lapx
 requests
 face_recognition
 python-dotenv
+setuptools<81

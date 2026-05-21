@@ -23,6 +23,33 @@ import requests
 from pydantic import BaseModel
 import sqlite3
 import pickle
+
+# Fix for Windows long path issue with face_recognition_models
+try:
+    import ctypes
+    import face_recognition_models as frm
+    
+    def get_short_path(long_path):
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, len(buf))
+            return buf.value if buf.value else long_path
+        except:
+            return long_path
+    
+    # Patch the model location functions
+    _orig_pose = frm.pose_predictor_model_location
+    _orig_pose5 = frm.pose_predictor_five_point_model_location
+    _orig_face = frm.face_recognition_model_location
+    _orig_cnn = frm.cnn_face_detector_model_location
+    
+    frm.pose_predictor_model_location = lambda: get_short_path(_orig_pose())
+    frm.pose_predictor_five_point_model_location = lambda: get_short_path(_orig_pose5())
+    frm.face_recognition_model_location = lambda: get_short_path(_orig_face())
+    frm.cnn_face_detector_model_location = lambda: get_short_path(_orig_cnn())
+except:
+    pass
+
 try:
     import face_recognition
     FACE_REC_AVAILABLE = True
@@ -155,6 +182,105 @@ def load_known_faces():
         print(f"Error loading faces: {e}")
 
 load_known_faces()
+
+# --- Auto-register new faces ---
+auto_register_lock = threading.Lock()
+pending_face_registrations = {}  # {(cam_id, track_id): (encoding, frame_crop, first_seen_time, has_encoding)}
+AUTO_REGISTER_DELAY = 3.0  # Only register if face appears for 3+ seconds
+
+def auto_register_new_face(face_encoding, face_image, cam_id, track_id, has_valid_encoding=True):
+    """Auto-register unknown faces to the database as allowlist"""
+    print(f"[AUTO-REG] Função auto_register_new_face chamada para cam {cam_id}, track {track_id}, has_encoding={has_valid_encoding}")
+    if not FACE_REC_AVAILABLE:
+        print(f"[AUTO-REG] Face recognition não disponível")
+        return None
+    
+    try:
+        # Check if face already exists in known faces (only if we have a valid encoding)
+        if has_valid_encoding:
+            with faces_lock:
+                if len(known_face_encodings) > 0:
+                    matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.5)
+                    if True in matches:
+                        print(f"[AUTO-REG] Rosto já existe no banco")
+                        return None  # Face already known
+        
+        # Use cam_id + track_id as unique identifier (more reliable than encoding hash)
+        registration_key = (cam_id, track_id)
+        current_time = time.time()
+        
+        should_register = False
+        with auto_register_lock:
+            if registration_key in pending_face_registrations:
+                first_seen_time = pending_face_registrations[registration_key][2]
+                elapsed = current_time - first_seen_time
+                print(f"[AUTO-REG] Pessoa já vista. Tempo decorrido: {elapsed:.1f}s (precisa {AUTO_REGISTER_DELAY}s)")
+                if current_time - first_seen_time >= AUTO_REGISTER_DELAY:
+                    # Person has been seen long enough, register it
+                    print(f"[AUTO-REG] Tempo suficiente! Registrando...")
+                    del pending_face_registrations[registration_key]
+                    should_register = True
+                else:
+                    # Update the image to the latest frame
+                    pending_face_registrations[registration_key] = (face_encoding, face_image, first_seen_time, has_valid_encoding)
+                    return None
+            else:
+                # First time seeing this person
+                print(f"[AUTO-REG] Primeira vez vendo esta pessoa. Adicionado à fila.")
+                pending_face_registrations[registration_key] = (face_encoding, face_image, current_time, has_valid_encoding)
+                return None
+        
+        # If we didn't meet the time requirement, return
+        if not should_register:
+            return None
+        
+        # If we reach here, face should be registered
+        import random
+        import string
+        
+        print(f"[AUTO-REG] Processando registro final...")
+        # Generate random name
+        random_suffix = ''.join(random.choices(string.digits, k=4))
+        name = f"Person_{random_suffix}"
+        print(f"[AUTO-REG] Nome gerado: {name}")
+        
+        # Save face image
+        if not os.path.exists("faces"):
+            os.makedirs("faces")
+            print(f"[AUTO-REG] Pasta 'faces' criada")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        face_filename = f"faces/face_{timestamp}_{random_suffix}.jpg"
+        cv2.imwrite(face_filename, face_image)
+        print(f"[AUTO-REG] Imagem salva em: {face_filename}")
+        
+        # Save to database
+        if has_valid_encoding and face_encoding is not None:
+            encoding_blob = pickle.dumps(face_encoding)
+            print(f"[AUTO-REG] Encoding facial salvo")
+        else:
+            # Create a dummy encoding for people without face detection
+            encoding_blob = pickle.dumps(np.zeros(128))  # Dummy 128-dim vector
+            print(f"[AUTO-REG] ⚠️ Sem encoding facial (pessoa longe/de costas). Salvo como genérico.")
+        
+        face_id = str(uuid.uuid4())
+        
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("INSERT INTO faces VALUES (?,?,?,?)", (face_id, name, "whitelist", encoding_blob))
+        conn.commit()
+        conn.close()
+        print(f"[AUTO-REG] Salvo no banco de dados com ID: {face_id}")
+        
+        # Reload faces
+        load_known_faces()
+        
+        print(f"✓ Auto-registered new person: {name} (from camera {cam_id})")
+        return name
+        
+    except Exception as e:
+        print(f"Error auto-registering face: {e}")
+        return None
 
 # --- API Endpoints ---
 
@@ -719,8 +845,8 @@ def video_loop():
 
                 if cap.isOpened() and 'ret' in locals() and ret:
                     
-                    # 1. POSE INFERENCE (Every Frame for tracking)
-                    results_pose = model_pose.track(frame, persist=True, verbose=False, classes=[0]) 
+                    # 1. POSE INFERENCE (Every Frame for tracking) - Increased confidence threshold
+                    results_pose = model_pose.track(frame, persist=True, verbose=False, classes=[0], conf=0.5) 
                     
                     # 2. THEFT / OBJECT INFERENCE
                     detected_objects = []
@@ -781,6 +907,28 @@ def video_loop():
                             box = boxes[i]
                             kpts = keypoints_all[i] if len(keypoints_all) > i else []
                             
+                            # ===== VALIDAÇÕES ANTI-FALSO POSITIVO =====
+                            # 1. Verificar tamanho mínimo da bounding box
+                            box_width = box[2] - box[0]
+                            box_height = box[3] - box[1]
+                            MIN_BOX_SIZE = 80  # Pixels
+                            
+                            if box_width < MIN_BOX_SIZE or box_height < MIN_BOX_SIZE:
+                                print(f"[FILTER] Track {track_id}: Ignorado - bounding box muito pequena ({box_width}x{box_height})")
+                                continue
+                            
+                            # 2. Verificar se tem keypoints corporais suficientes (não apenas faciais)
+                            if len(kpts) >= 17:  # YOLOv8 pose tem 17 keypoints
+                                visible_keypoints = sum([1 for kp in kpts if kp[0] > 0 and kp[1] > 0])
+                                MIN_VISIBLE_KEYPOINTS = 5
+                                
+                                if visible_keypoints < MIN_VISIBLE_KEYPOINTS:
+                                    print(f"[FILTER] Track {track_id}: Ignorado - poucos keypoints visíveis ({visible_keypoints}/17)")
+                                    continue
+                            else:
+                                print(f"[FILTER] Track {track_id}: Ignorado - sem keypoints")
+                                continue
+                            
                             # Multi-camera safe tracking key
                             state_key = (cam_id, track_id)
                             if state_key not in person_states:
@@ -793,27 +941,169 @@ def video_loop():
                             # --- FACE REC ---
                             if FACE_REC_AVAILABLE and (not p_state.face_checked or (current_time - p_state.face_check_time > 2.0)):
                                 p_state.face_check_time = current_time
-                                fx1, fy1, fx2, fy2 = max(0, box[0]), max(0, box[1]), min(frame.shape[1], box[2]), min(frame.shape[0], box[3])
-                                face_img = frame[fy1:fy2, fx1:fx2]
-                                rgb_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
-                                face_locs = face_recognition.face_locations(rgb_face)
-                                if face_locs:
-                                    encodings = face_recognition.face_encodings(rgb_face, face_locs)
-                                    if encodings:
-                                        with faces_lock:
-                                            matches = face_recognition.compare_faces(known_face_encodings, encodings[0], tolerance=0.5)
-                                        if True in matches:
-                                            match_index = matches.index(True)
-                                            match_name = known_face_names[match_index]
-                                            match_type = known_face_types[match_index]
-                                            if match_type == "blacklist":
-                                                cv2.putText(frame, f"BLACKLIST: {match_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
-                                                if current_time - cam_data["last_alert_time"] > ALERT_COOLDOWN:
-                                                    trigger_alert(cam_id, name, f"BLACKLIST FACE: {match_name}", frame)
-                                                    cam_data["last_alert_time"] = current_time
-                                            else:
-                                                cv2.putText(frame, f"VIP: {match_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-                                p_state.face_checked = True
+                                
+                                # Validação: Verificar se é realmente uma pessoa com keypoints faciais
+                                has_valid_face_keypoints = False
+                                if len(kpts) >= 5:
+                                    nose = kpts[0]
+                                    left_eye = kpts[1]
+                                    right_eye = kpts[2]
+                                    left_ear = kpts[3]
+                                    right_ear = kpts[4]
+                                    
+                                    # Contar quantos keypoints faciais estão visíveis
+                                    visible_face_keypoints = sum([
+                                        1 if nose[0] > 0 and nose[1] > 0 else 0,
+                                        1 if left_eye[0] > 0 and left_eye[1] > 0 else 0,
+                                        1 if right_eye[0] > 0 and right_eye[1] > 0 else 0,
+                                        1 if left_ear[0] > 0 and left_ear[1] > 0 else 0,
+                                        1 if right_ear[0] > 0 and right_ear[1] > 0 else 0
+                                    ])
+                                    
+                                    # Precisa de pelo menos 2 keypoints faciais visíveis para ser considerado válido
+                                    has_valid_face_keypoints = visible_face_keypoints >= 2
+                                    print(f"[DEBUG] Track {track_id}: {visible_face_keypoints}/5 keypoints faciais visíveis")
+                                
+                                # Só processa se tiver keypoints faciais válidos
+                                if has_valid_face_keypoints:
+                                    print(f"[DEBUG] Iniciando reconhecimento facial para track_id {track_id} em câmera {cam_id}")
+                                    
+                                    # Try to use keypoints to get better face crop
+                                    face_img = None
+                                    fx1, fy1, fx2, fy2 = 0, 0, 0, 0
+                                    
+                                    if len(kpts) >= 5:  # Check if we have nose keypoint (index 0)
+                                        nose = kpts[0]
+                                        left_eye = kpts[1]
+                                        right_eye = kpts[2]
+                                        
+                                        # If we have visible facial keypoints
+                                        if nose[0] > 0 and nose[1] > 0:
+                                            # Create a crop centered on the nose with padding
+                                            crop_size = int((box[2] - box[0]) * 0.5)  # Half the body width
+                                            
+                                            fx1 = max(0, int(nose[0] - crop_size))
+                                            fy1 = max(0, int(nose[1] - crop_size))
+                                            fx2 = min(frame.shape[1], int(nose[0] + crop_size))
+                                            fy2 = min(frame.shape[0], int(nose[1] + crop_size))
+                                            
+                                            face_img = frame[fy1:fy2, fx1:fx2]
+                                            print(f"[DEBUG] Usando keypoints para crop. Nose: {nose}")
+                                
+                                # Fallback: use top portion of bounding box
+                                if face_img is None or face_img.size == 0:
+                                    box_height = box[3] - box[1]
+                                    
+                                    fx1 = max(0, box[0])
+                                    fy1 = max(0, box[1])
+                                    fx2 = min(frame.shape[1], box[2])
+                                    fy2 = min(frame.shape[0], box[1] + int(box_height * 0.5))
+                                    
+                                    face_img = frame[fy1:fy2, fx1:fx2]
+                                    print(f"[DEBUG] Usando bounding box top 50%")
+                                
+                                print(f"[DEBUG] Face crop size: {face_img.shape if face_img.size > 0 else 'vazio'}")
+                                
+                                # Save debug image
+                                if face_img.size > 0 and not os.path.exists(f"debug_face_{track_id}.jpg"):
+                                    cv2.imwrite(f"debug_face_{track_id}.jpg", face_img)
+                                    print(f"[DEBUG] Imagem de debug salva: debug_face_{track_id}.jpg")
+                                
+                                if face_img.size > 0:  # Check if crop is valid
+                                    # Resize image for faster face detection (max 600px width)
+                                    h, w = face_img.shape[:2]
+                                    if w > 600:
+                                        scale = 600 / w
+                                        new_w = 600
+                                        new_h = int(h * scale)
+                                        face_img_resized = cv2.resize(face_img, (new_w, new_h))
+                                        print(f"[DEBUG] Imagem redimensionada de {w}x{h} para {new_w}x{new_h}")
+                                    else:
+                                        face_img_resized = face_img
+                                    
+                                    rgb_face = cv2.cvtColor(face_img_resized, cv2.COLOR_BGR2RGB)
+                                    # Use HOG model (faster)
+                                    face_locs = face_recognition.face_locations(rgb_face, model="hog", number_of_times_to_upsample=0)
+                                    
+                                    print(f"[DEBUG] Face locations detectadas: {len(face_locs)}")
+                                    
+                                    # Fallback: se não detectou rosto, tenta gerar encoding da imagem inteira
+                                    if len(face_locs) == 0:
+                                        print(f"[DEBUG] Tentando encoding da imagem inteira...")
+                                        try:
+                                            test_encodings = face_recognition.face_encodings(rgb_face)
+                                            if len(test_encodings) > 0:
+                                                print(f"[DEBUG] ✓ Encoding gerado sem location!")
+                                                # Cria uma location fake que cobre a imagem inteira
+                                                face_locs = [(0, rgb_face.shape[1], rgb_face.shape[0], 0)]
+                                        except Exception as e:
+                                            print(f"[DEBUG] Erro ao gerar encoding: {e}")
+                                    
+                                    if face_locs:
+                                        encodings = face_recognition.face_encodings(rgb_face, face_locs)
+                                        print(f"[DEBUG] Encodings gerados: {len(encodings)}")
+                                        if encodings:
+                                            face_recognized = False
+                                            with faces_lock:
+                                                print(f"[DEBUG] Comparando com {len(known_face_encodings)} faces conhecidas")
+                                                if len(known_face_encodings) > 0:
+                                                    matches = face_recognition.compare_faces(known_face_encodings, encodings[0], tolerance=0.5)
+                                                    print(f"[DEBUG] Matches encontrados: {matches}")
+                                                    if True in matches:
+                                                        face_recognized = True
+                                                        match_index = matches.index(True)
+                                                        match_name = known_face_names[match_index]
+                                                        match_type = known_face_types[match_index]
+                                                        if match_type == "blacklist":
+                                                            cv2.putText(frame, f"BLACKLIST: {match_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
+                                                            if current_time - cam_data["last_alert_time"] > ALERT_COOLDOWN:
+                                                                trigger_alert(cam_id, name, f"BLACKLIST FACE: {match_name}", frame)
+                                                                cam_data["last_alert_time"] = current_time
+                                                        else:
+                                                            cv2.putText(frame, f"VIP: {match_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                                            
+                                            # Auto-register unknown faces
+                                            if not face_recognized:
+                                                print(f"[DEBUG] Rosto desconhecido! Iniciando auto-registro...")
+                                                # Get face crop with some padding
+                                                face_loc = face_locs[0]  # top, right, bottom, left
+                                                top, right, bottom, left = face_loc
+                                                
+                                                # Convert to absolute coordinates in original frame
+                                                abs_top = fy1 + top
+                                                abs_bottom = fy1 + bottom
+                                                abs_left = fx1 + left
+                                                abs_right = fx1 + right
+                                                
+                                                # Add padding
+                                                padding = 20
+                                                abs_top = max(0, abs_top - padding)
+                                                abs_bottom = min(frame.shape[0], abs_bottom + padding)
+                                                abs_left = max(0, abs_left - padding)
+                                                abs_right = min(frame.shape[1], abs_right + padding)
+                                                
+                                                face_crop = frame[abs_top:abs_bottom, abs_left:abs_right]
+                                                
+                                                # Auto-register
+                                                registered_name = auto_register_new_face(encodings[0], face_crop, cam_id, track_id, has_valid_encoding=True)
+                                                if registered_name:
+                                                    cv2.putText(frame, f"NEW: {registered_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,0), 2)
+                                                else:
+                                                    cv2.putText(frame, "UNKNOWN", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128,128,128), 2)
+                                    else:
+                                        # Não conseguiu detectar/gerar encoding - registra mesmo assim com imagem
+                                        print(f"[DEBUG] Sem encoding válido. Registrando pessoa sem reconhecimento facial.")
+                                        registered_name = auto_register_new_face(None, face_img, cam_id, track_id, has_valid_encoding=False)
+                                        if registered_name:
+                                            cv2.putText(frame, f"DETECTADO: {registered_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,165,0), 2)
+                                        else:
+                                            cv2.putText(frame, "PROCESSANDO...", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128,128,128), 2)
+                                            
+                                    p_state.face_checked = True
+                                else:
+                                    # Não tem keypoints faciais suficientes - ignora esta detecção
+                                    print(f"[DEBUG] Track {track_id}: Ignorado - não parece ser uma pessoa válida")
+                                    p_state.face_checked = True
 
                             # --- POSE & THEFT LOGIC ---
                             is_bending = check_bending(kpts)

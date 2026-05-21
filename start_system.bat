@@ -9,8 +9,8 @@ echo ==================================================
 echo.
 
 :: 1. Start Backend (in new window)
-echo [1/3] Starting Backend Service (Python/FastAPI)...
-start "Theft Guard Backend" cmd /k "py backend.py"
+echo [1/3] Starting Backend Service (Python/FastAPI, Python 3.11)...
+start "Theft Guard Backend" cmd /k "py -3.11 backend.py"
 
 :: Wait for backend to initialize
 timeout /t 3 /nobreak >nul

@@ -31,6 +31,10 @@ export default function CamerasPage() {
   const [selectedCam, setSelectedCam] = useState<CameraData | null>(null);
   const [roiPoints, setRoiPoints] = useState<number[][]>([]);
   const [activeFrameBase64, setActiveFrameBase64] = useState<string | null>(null);
+  const [frameResolution, setFrameResolution] = useState<{ width: number; height: number }>({
+    width: 1280,
+    height: 720,
+  });
   const wsRef = useRef<WebSocket | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -107,6 +111,13 @@ export default function CamerasPage() {
         const img = new Image();
         img.src = `data:image/jpeg;base64,${activeFrameBase64}`;
         img.onload = () => {
+          if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+            setFrameResolution((prev) =>
+              prev.width === img.naturalWidth && prev.height === img.naturalHeight
+                ? prev
+                : { width: img.naturalWidth, height: img.naturalHeight }
+            );
+          }
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           drawPolygon();
         };
@@ -175,13 +186,19 @@ export default function CamerasPage() {
 
     setSubmitting(true);
     setMessage(null);
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     try {
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 15000);
+
       const res = await fetch(`${apiBaseUrl}/cameras`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, source }),
+        signal: controller.signal,
       });
+
       const data = await res.json();
 
       if (res.ok) {
@@ -194,8 +211,13 @@ export default function CamerasPage() {
       }
     } catch (err) {
       console.error(err);
-      setMessage({ text: "Connection error. Make sure backend is running.", type: "error" });
+      if (err instanceof Error && err.name === "AbortError") {
+        setMessage({ text: "Camera connection timed out. Check source/RTSP URL and try again.", type: "error" });
+      } else {
+        setMessage({ text: "Connection error. Make sure backend is running.", type: "error" });
+      }
     } finally {
+      if (timeoutId) clearTimeout(timeoutId);
       setSubmitting(false);
     }
   };
@@ -241,6 +263,7 @@ export default function CamerasPage() {
   const openRoiModal = (cam: CameraData) => {
     setSelectedCam(cam);
     setRoiPoints(cam.roi_points || []);
+    setFrameResolution({ width: 1280, height: 720 });
   };
 
   const handleSaveRoi = async () => {
@@ -465,8 +488,8 @@ export default function CamerasPage() {
               <div className="aspect-video w-full bg-black/60 rounded-lg overflow-hidden border border-glass-border relative flex items-center justify-center">
                 <canvas
                   ref={canvasRef}
-                  width={1280}
-                  height={720}
+                  width={frameResolution.width}
+                  height={frameResolution.height}
                   onClick={handleCanvasClick}
                   className="w-full h-auto aspect-video cursor-crosshair object-contain"
                 />

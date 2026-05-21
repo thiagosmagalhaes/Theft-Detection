@@ -4,9 +4,11 @@ websockets
 python-multipart
 opencv-python
 ultralytics
-numpy
+numpy<2.0
 lapx
 requests
-face_recognition
+scipy
 python-dotenv
 setuptools<81
+insightface
+onnxruntime

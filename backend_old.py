@@ -289,10 +289,8 @@ def auto_register_new_face(face_encoding, face_image, cam_id, track_id, has_vali
 async def register_face(file: UploadFile = File(...), name: str = Form(...), type: str = Form("blacklist")):
     if not FACE_REC_AVAILABLE: return {"status": "error", "message": "Face Rec not available"}
     temp_filename = f"temp_{uuid.uuid4()}.jpg"
-    try:
-        with open(temp_filename, "wb") as buffer:
-            buffer.write(await file.read())
-        
+    
+    def _process_sync():
         image = face_recognition.load_image_file(temp_filename)
         encodings = face_recognition.face_encodings(image)
         
@@ -307,10 +305,19 @@ async def register_face(file: UploadFile = File(...), name: str = Form(...), typ
             conn.commit()
             conn.close()
             
-            load_known_faces() # Reload
+            load_known_faces()
             return {"status": "success", "message": f"Face registered: {name}"}
         else:
             return {"status": "error", "message": "No face found in image"}
+    
+    try:
+        # Save uploaded file
+        with open(temp_filename, "wb") as buffer:
+            buffer.write(await file.read())
+        
+        # Process in background thread (heavy CPU + DB operations)
+        result = await asyncio.to_thread(_process_sync)
+        return result
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
@@ -319,13 +326,16 @@ async def register_face(file: UploadFile = File(...), name: str = Form(...), typ
 
 @app.get("/faces")
 async def get_faces():
-    try:
+    def _fetch_sync():
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("SELECT id, name, type FROM faces")
         rows = c.fetchall()
         conn.close()
         return [{"id": r[0], "name": r[1], "type": r[2]} for r in rows]
+    
+    try:
+        return await asyncio.to_thread(_fetch_sync)
     except Exception as e:
         return {"error": str(e)}
 
@@ -343,25 +353,28 @@ async def save_settings(settings: SettingsModel):
     current_settings = settings
     roi_points = settings.roiPoints # Update global ROI
     
-    from dotenv import set_key
-    env_path = ".env"
-    if not os.path.exists(env_path):
-        open(env_path, 'a').close()
+    # Non-blocking file operations
+    def _save_sync():
+        from dotenv import set_key
+        env_path = ".env"
+        if not os.path.exists(env_path):
+            open(env_path, 'a').close()
+            
+        if settings.senderPassword and settings.senderPassword != "********":
+            set_key(env_path, "SMTP_PASSWORD", settings.senderPassword)
+        if settings.telegramBotToken and settings.telegramBotToken != "********":
+            set_key(env_path, "TELEGRAM_BOT_TOKEN", settings.telegramBotToken)
+            
+        safe_settings = settings.dict()
+        safe_settings["senderPassword"] = ""
+        safe_settings["telegramBotToken"] = ""
         
-    if settings.senderPassword and settings.senderPassword != "********":
-        set_key(env_path, "SMTP_PASSWORD", settings.senderPassword)
-    if settings.telegramBotToken and settings.telegramBotToken != "********":
-        set_key(env_path, "TELEGRAM_BOT_TOKEN", settings.telegramBotToken)
-        
-    safe_settings = settings.dict()
-    # Mask sensitive data in JSON
-    safe_settings["senderPassword"] = ""
-    safe_settings["telegramBotToken"] = ""
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(safe_settings, f, indent=4)
+            
+        load_dotenv(override=True)
     
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(safe_settings, f, indent=4)
-        
-    load_dotenv(override=True)
+    await asyncio.to_thread(_save_sync)
     return {"status": "success", "message": "Settings saved"}
 
 @app.post("/roi")
@@ -370,8 +383,13 @@ async def save_roi(data: dict):
     if "points" in data:
         roi_points = data["points"]
         current_settings.roiPoints = roi_points
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(current_settings.dict(), f, indent=4)
+        
+        # Non-blocking file write
+        def _save_sync():
+            with open(SETTINGS_FILE, "w") as f:
+                json.dump(current_settings.dict(), f, indent=4)
+        await asyncio.to_thread(_save_sync)
+        
         print(f"ROI Updated: {roi_points}")
         return {"status": "success"}
     return {"status": "error"}
@@ -383,53 +401,65 @@ async def get_roi():
 
 @app.post("/settings/test")
 async def test_settings(settings: SettingsModel):
-    original_settings = current_settings.copy()
-    
-    if settings.emailEnabled:
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = settings.senderEmail
-            msg['To'] = settings.receiverEmail
-            msg['Subject'] = "Theft Detection - Test Email"
-            msg.attach(MIMEText("This is a test email from your Theft Detection System.", 'plain'))
-            server = smtplib.SMTP(settings.smtpServer, int(settings.smtpPort))
-            server.starttls()
-            server.login(settings.senderEmail, settings.senderPassword)
-            server.send_message(msg)
-            server.quit()
-        except Exception as e:
-            return {"status": "error", "message": f"Email Test Failed: {str(e)}"}
+    def _test_sync():
+        if settings.emailEnabled:
+            try:
+                msg = MIMEMultipart()
+                msg['From'] = settings.senderEmail
+                msg['To'] = settings.receiverEmail
+                msg['Subject'] = "Theft Detection - Test Email"
+                msg.attach(MIMEText("This is a test email from your Theft Detection System.", 'plain'))
+                server = smtplib.SMTP(settings.smtpServer, int(settings.smtpPort))
+                server.starttls()
+                server.login(settings.senderEmail, settings.senderPassword)
+                server.send_message(msg)
+                server.quit()
+            except Exception as e:
+                return {"status": "error", "message": f"Email Test Failed: {str(e)}"}
 
-    if settings.telegramEnabled:
-        try:
-            url = f"https://api.telegram.org/bot{settings.telegramBotToken}/sendMessage"
-            data = {"chat_id": settings.telegramChatId, "text": "Theft Detection - Test Message"}
-            resp = requests.post(url, data=data)
-            if resp.status_code != 200:
-                 return {"status": "error", "message": f"Telegram Test Failed: {resp.text}"}
-        except Exception as e:
-            return {"status": "error", "message": f"Telegram Test Failed: {str(e)}"}
-            
-    return {"status": "success", "message": "All enabled tests sent successfully!"}
+        if settings.telegramEnabled:
+            try:
+                url = f"https://api.telegram.org/bot{settings.telegramBotToken}/sendMessage"
+                data = {"chat_id": settings.telegramChatId, "text": "Theft Detection - Test Message"}
+                resp = requests.post(url, data=data, timeout=10)
+                if resp.status_code != 200:
+                     return {"status": "error", "message": f"Telegram Test Failed: {resp.text}"}
+            except Exception as e:
+                return {"status": "error", "message": f"Telegram Test Failed: {str(e)}"}
+                
+        return {"status": "success", "message": "All enabled tests sent successfully!"}
+    
+    # Run network operations in background with timeout protection
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_test_sync),
+            timeout=30.0
+        )
+        return result
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": "Test timed out (network issue)"}
 
 
 
 @app.delete("/faces/{face_id}")
 async def delete_face(face_id: str):
-    try:
+    def _delete_sync():
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("DELETE FROM faces WHERE id = ?", (face_id,))
         conn.commit()
         conn.close()
-        load_known_faces() # Reload
+        load_known_faces()
+    
+    try:
+        await asyncio.to_thread(_delete_sync)
         return {"status": "success", "message": "Face deleted successfully"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @app.get("/history")
 async def get_history():
-    try:
+    def _fetch_sync():
         conn = sqlite3.connect(DB_NAME)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
@@ -437,6 +467,9 @@ async def get_history():
         rows = c.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+    
+    try:
+        return await asyncio.to_thread(_fetch_sync)
     except Exception as e:
         return {"error": str(e)}
 
@@ -536,6 +569,7 @@ class CameraManager:
         self.save_cameras()
 
     def save_cameras(self):
+        """Synchronous helper - call from background thread only"""
         file_path = "cameras.json"
         try:
             data = []
@@ -551,6 +585,10 @@ class CameraManager:
                 json.dump(data, f, indent=4)
         except Exception as e:
             print(f"Error saving cameras.json: {e}")
+    
+    async def save_cameras_async(self):
+        """Non-blocking async version"""
+        await asyncio.to_thread(self.save_cameras)
 
     def add_camera_internal(self, cam_id, source, name, roi_points):
         threaded_cap = ThreadedCamera(source)
@@ -618,7 +656,19 @@ class CameraInput(BaseModel):
 
 @app.post("/cameras")
 async def add_new_camera(cam: CameraInput):
-    result = camera_manager.add_camera(cam.source, cam.name)
+    # Opening an unavailable RTSP/camera source can block for a long time.
+    # Run it in a worker thread and enforce an API timeout to keep backend responsive.
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(camera_manager.add_camera, cam.source, cam.name),
+            timeout=12.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Camera connection timed out. Check source/RTSP URL and try again.",
+        )
+
     if result["id"]:
         with camera_manager.lock:
             cam_data = camera_manager.cameras.get(result["id"])
@@ -633,41 +683,44 @@ async def add_new_camera(cam: CameraInput):
         raise HTTPException(status_code=400, detail="Failed to open camera")
 
 @app.get("/stats")
-def get_stats():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT substr(timestamp, 1, 8), count(*) FROM alerts GROUP BY substr(timestamp, 1, 8)")
-    data = dict(c.fetchall())
-    conn.close()
-    
-    stats = []
-    from datetime import timedelta
-    today = datetime.now()
-    for i in range(6, -1, -1):
-        d = today - timedelta(days=i)
-        key = d.strftime("%Y%m%d")
-        stats.append(data.get(key, 0))
+async def get_stats():
+    def _fetch_sync():
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("SELECT substr(timestamp, 1, 8), count(*) FROM alerts GROUP BY substr(timestamp, 1, 8)")
+        data = dict(c.fetchall())
+        conn.close()
+        
+        stats = []
+        from datetime import timedelta
+        today = datetime.now()
+        for i in range(6, -1, -1):
+            d = today - timedelta(days=i)
+            key = d.strftime("%Y%m%d")
+            stats.append(data.get(key, 0))
 
-    cpu_load = 0
-    ram_load = 0
-    if PSUTIL_AVAILABLE:
-        try:
-            cpu_load = psutil.cpu_percent()
-            ram_load = psutil.virtual_memory().percent
-        except:
+        cpu_load = 0
+        ram_load = 0
+        if PSUTIL_AVAILABLE:
+            try:
+                cpu_load = psutil.cpu_percent()
+                ram_load = psutil.virtual_memory().percent
+            except:
+                import random
+                cpu_load = random.randint(15, 30)
+                ram_load = random.randint(40, 50)
+        else:
             import random
             cpu_load = random.randint(15, 30)
             ram_load = random.randint(40, 50)
-    else:
-        import random
-        cpu_load = random.randint(15, 30)
-        ram_load = random.randint(40, 50)
-        
-    return {
-        "weekly_data": stats,
-        "cpu_load": cpu_load,
-        "ram_load": ram_load
-    }
+            
+        return {
+            "weekly_data": stats,
+            "cpu_load": cpu_load,
+            "ram_load": ram_load
+        }
+    
+    return await asyncio.to_thread(_fetch_sync)
 
 @app.get("/cameras")
 async def list_cameras():
@@ -675,7 +728,9 @@ async def list_cameras():
 
 @app.delete("/cameras/{camera_id}")
 async def delete_camera(camera_id: str):
-    if camera_manager.remove_camera(camera_id):
+    # Remove camera in background thread to avoid blocking on save_cameras()
+    result = await asyncio.to_thread(camera_manager.remove_camera, camera_id)
+    if result:
         return {"message": "Camera removed"}
     raise HTTPException(status_code=404, detail="Camera not found")
 
@@ -686,7 +741,8 @@ async def save_camera_roi(camera_id: str, data: dict):
         with camera_manager.lock:
             if camera_id in camera_manager.cameras:
                 camera_manager.cameras[camera_id]["roi_points"] = points
-                camera_manager.save_cameras()
+                # Non-blocking save
+                await camera_manager.save_cameras_async()
                 return {"status": "success", "roi_points": points}
         raise HTTPException(status_code=404, detail="Camera not found")
     raise HTTPException(status_code=400, detail="Invalid data")

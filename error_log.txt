@@ -1,0 +1,59 @@
+2026-05-21 01:28:57.449726: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:28:58.531654: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:28:59.610840: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:29:00.689048: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:29:01.765345: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:29:02.841786: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:29:03.914140: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:29:04.992677: Loop Runtime Error: OpenCV(4.13.0) :-1: error: (-5:Bad argument) in function 'pointPolygonTest'
+> Overload resolution failed:
+>  - contour data type = object is not supported
+>  - Expected Ptr<cv::UMat> for argument 'contour'
+
+2026-05-21 01:50:57.826776: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:50:58.885778: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:50:59.936263: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:00.983559: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:02.030936: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:03.082311: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:04.131465: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:05.189332: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:06.248071: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:07.307236: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:08.364675: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:09.438121: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:10.511231: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:11.598432: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:12.669674: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:13.745893: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:14.793825: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:15.845552: Loop Runtime Error: No module named 'face_recognition'
+2026-05-21 01:51:16.897018: Loop Runtime Error: No module named 'face_recognition'

@@ -74,7 +74,7 @@ export default function HistoryPage() {
 
   // Advanced client-side filtering matching logic
   const filteredHistory = history.filter((event) => {
-    const matchesSearch = 
+    const matchesSearch =
       event.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       event.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
       event.image_path.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -103,10 +103,10 @@ export default function HistoryPage() {
       event.image_path,
       event.video_path || ""
     ]);
-    
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
+
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF"
       + [headers.join(","), ...rows.map(r => r.map(val => `"${val.replace(/"/g, '""')}"`).join(","))].join("\n");
-      
+
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
@@ -128,7 +128,7 @@ export default function HistoryPage() {
             <Calendar className="w-4 h-4" />
             Last 7 Days
           </button>
-          <button 
+          <button
             onClick={handleExportCSV}
             disabled={filteredHistory.length === 0}
             className="flex items-center gap-2 px-4 py-2 bg-brand/20 border border-brand/35 hover:bg-brand/30 text-brand rounded-lg transition-colors text-sm font-bold cursor-pointer disabled:opacity-50"
@@ -143,15 +143,15 @@ export default function HistoryPage() {
         <div className="p-4 border-b border-glass-border flex gap-4">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-foreground/50" />
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search by event ID, type, or camera..." 
+              placeholder="Search by event ID, type, or camera..."
               className="w-full bg-black/40 border border-glass-border rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand"
             />
           </div>
-          <select 
+          <select
             value={selectedType}
             onChange={e => setSelectedType(e.target.value)}
             className="bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand text-foreground"
@@ -193,11 +193,10 @@ export default function HistoryPage() {
                     <td className="p-4 font-mono text-brand text-xs">{event.id.slice(0, 8)}...</td>
                     <td className="p-4 text-foreground/80">{formatTime(event.timestamp)}</td>
                     <td className="p-4">
-                      <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
-                        event.message.includes('THEFT') || event.message.includes('CRIMINAL') ? 'bg-danger/20 text-danger border border-danger/20' : 
-                        event.message.includes('BLACKLIST') || event.message.includes('RESTRICTED') ? 'bg-orange-500/20 text-orange-400 border border-orange-500/20' :
-                        'bg-blue-500/20 text-blue-400 border border-blue-500/20'
-                      }`}>
+                      <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${event.message.includes('THEFT') || event.message.includes('CRIMINAL') ? 'bg-danger/20 text-danger border border-danger/20' :
+                          event.message.includes('BLACKLIST') || event.message.includes('RESTRICTED') ? 'bg-orange-500/20 text-orange-400 border border-orange-500/20' :
+                            'bg-blue-500/20 text-blue-400 border border-blue-500/20'
+                        }`}>
                         {event.message}
                       </span>
                     </td>
@@ -312,7 +311,7 @@ export default function HistoryPage() {
             </tbody>
           </table>
         </div>
-        
+
         {!loading && filteredHistory.length > 0 && (
           <div className="p-4 border-t border-glass-border flex items-center justify-between text-sm text-foreground/60">
             <div>Showing {filteredHistory.length} of {history.length} entries</div>

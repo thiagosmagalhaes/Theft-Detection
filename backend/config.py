@@ -37,6 +37,13 @@ except ImportError:
     FACE_REC_AVAILABLE = False
     print("InsightFace not installed. Face recognition disabled.")
 
+# Allow disabling face recognition and face saving via environment variable
+# Set FACE_RECOGNITION_ENABLED=false in .env to disable without uninstalling InsightFace
+_face_rec_env = os.getenv("FACE_RECOGNITION_ENABLED", "true").strip().lower()
+if _face_rec_env in ("false", "0", "no", "off"):
+    FACE_REC_AVAILABLE = False
+    print("Face recognition disabled via FACE_RECOGNITION_ENABLED env flag.")
+
 try:
     import psutil
     PSUTIL_AVAILABLE = True

@@ -29,6 +29,10 @@ class DetectionConfigModel(BaseModel):
     entryZoneBehavior: str = "no_score"               # no_score | half_score | ignore_completely
     alertChain: str = "confirmed_chain_only"          # confirmed_chain_only | confirmed_chain_or_high_score | recalibrate_weights
     highScoreThreshold: float = 2.0
+    theftAlertThreshold: float = 1.2
+    trackerDecayPerFrame: float = 0.98
+    trackerRiskCap: float = 2.5
+    trackerConfThreshold: float = 0.3
     preAlertLabel: str = "atencao_revisar"            # atencao_revisar | comportamento_suspeito | monitorar | suspeito
     confirmedAlertLabel: str = "ocultacao_confirmada" # furto_detectado | ocultacao_confirmada | revisar_urgente
 

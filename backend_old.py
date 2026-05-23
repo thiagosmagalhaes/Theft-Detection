@@ -25,8 +25,8 @@ import sqlite3
 import pickle
 
 # YOLO model files (configurable via .env)
-YOLO_POSE_MODEL = os.getenv("YOLO_POSE_MODEL", "yolov8n-pose.pt").strip()
-YOLO_OBJ_MODEL = os.getenv("YOLO_OBJ_MODEL", "yolov8n.pt").strip()
+YOLO_POSE_MODEL = os.getenv("YOLO_POSE_MODEL", "yolo26x-pose.pt").strip()
+YOLO_OBJ_MODEL = os.getenv("YOLO_OBJ_MODEL", "yolo26x.pt").strip()
 YOLO_SPECIALIZED_MODEL = os.getenv("YOLO_SPECIALIZED_MODEL", "shoplifting.pt").strip()
 
 # Fix for Windows long path issue with face_recognition_models

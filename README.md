@@ -125,8 +125,8 @@ OBJECT_DETECTOR_BACKEND=rf-detr
 RF_DETR_MODEL_ID=Roboflow/rf-detr-base
 
 # YOLO file names (also read from .env)
-YOLO_POSE_MODEL=yolov8n-pose.pt
-YOLO_OBJ_MODEL=yolov8n.pt
+YOLO_POSE_MODEL=yolo26x-pose.pt
+YOLO_OBJ_MODEL=yolo26x.pt
 YOLO_SPECIALIZED_MODEL=shoplifting.pt
 ```
 

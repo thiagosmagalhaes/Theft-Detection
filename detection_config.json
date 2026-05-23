@@ -12,6 +12,10 @@
   "entryZoneBehavior": "no_score",
   "alertChain": "confirmed_chain_only",
   "highScoreThreshold": 2.0,
+  "theftAlertThreshold": 1.2,
+  "trackerDecayPerFrame": 0.98,
+  "trackerRiskCap": 2.5,
+  "trackerConfThreshold": 0.3,
   "preAlertLabel": "atencao_revisar",
   "confirmedAlertLabel": "ocultacao_confirmada"
 }

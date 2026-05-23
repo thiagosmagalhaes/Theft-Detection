@@ -24,20 +24,38 @@ from ..detection import (
     update_heatmap,
     get_heatmap_overlay,
     check_reaching,
-    check_object_in_hand,
-    check_concealment,
     check_bending,
     is_person_facing_away,
-    load_object_detector
+    load_object_detector,
+    TheftBehaviorTracker,
 )
+from ..api.detection_config import get_detection_config
 from ..alerts import trigger_alert
 
 # Global state
 camera_manager = CameraManager()
 person_states = {}  # {(cam_id, track_id): PersonState}
+theft_trackers = {}  # {cam_id: TheftBehaviorTracker}
 latest_frame = None
 alert_payload = None
 lock = threading.Lock()
+
+# COCO classes typically representing personal bags/luggage.
+BAG_CLASS_IDS = {24, 26, 28}
+
+
+def should_trigger_theft_alert(result, config):
+    """Evaluate whether a tracker result should trigger a theft alert."""
+    policy = getattr(config, "alertChain", "confirmed_chain_only")
+    high_score_threshold = float(getattr(config, "highScoreThreshold", 2.0))
+    events = result.get("events", [])
+    risk = float(result.get("risk", 0.0))
+    reached_alert_level = bool(result.get("alert", False))
+    has_confirmed_chain = any(e.get("type") == "object_vanished_at_body" for e in events)
+
+    if policy == "confirmed_chain_or_high_score":
+        return (reached_alert_level and has_confirmed_chain) or risk >= high_score_threshold
+    return reached_alert_level and has_confirmed_chain
 
 
 def get_camera_buffer(cam_data):
@@ -110,7 +128,7 @@ def is_valid_polygon(points, min_area=100.0):
 
 def video_loop():
     """Main video processing loop"""
-    global latest_frame, alert_payload, person_states
+    global latest_frame, alert_payload, person_states, theft_trackers
     
     print("Video Loop Başlatılıyor...") 
     object_detector = None
@@ -149,6 +167,28 @@ def video_loop():
                 cap = cam_data["cap"]
                 name = cam_data["name"]
                 current_time = time.time()
+                detection_config = get_detection_config()
+
+                # Build/refresh one theft tracker per camera.
+                tracker = theft_trackers.get(cam_id)
+                if tracker is None:
+                    fps = cap.get(cv2.CAP_PROP_FPS) if cap and cap.isOpened() else 0
+                    if not fps or fps <= 0:
+                        fps = 15
+                    tracker = TheftBehaviorTracker(
+                        fps=int(fps),
+                        decay_per_frame=float(getattr(detection_config, "trackerDecayPerFrame", 0.98)),
+                        alert_threshold=float(getattr(detection_config, "theftAlertThreshold", 1.2)),
+                        risk_cap=float(getattr(detection_config, "trackerRiskCap", 2.5)),
+                        conf_thr=float(getattr(detection_config, "trackerConfThreshold", 0.3)),
+                    )
+                    theft_trackers[cam_id] = tracker
+
+                # Keep thresholds hot-reloadable from /detection-config.
+                tracker.alert_threshold = float(getattr(detection_config, "theftAlertThreshold", 1.2))
+                tracker.decay = float(getattr(detection_config, "trackerDecayPerFrame", 0.98))
+                tracker.risk_cap = float(getattr(detection_config, "trackerRiskCap", 2.5))
+                tracker.conf_thr = float(getattr(detection_config, "trackerConfThreshold", 0.3))
                 
                 # Multi-zone ROIs (new): list of dicts {zone_type, points}
                 raw_zones = cam_data.get("roi_zones", [])
@@ -190,6 +230,7 @@ def video_loop():
                     
                     # 2. THEFT / OBJECT INFERENCE
                     detected_objects = []
+                    bag_boxes = []
                     suspicious_activity_detected = False
 
                     if object_detector is not None:
@@ -245,7 +286,10 @@ def video_loop():
                                 cv2.putText(frame, label, (b[0], max(20, b[1] - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
                                 if is_target:
-                                    detected_objects.append(b)
+                                    if c in BAG_CLASS_IDS:
+                                        bag_boxes.append(b)
+                                    else:
+                                        detected_objects.append(b)
 
                     cam_data["last_objects"] = detected_objects
 
@@ -298,13 +342,6 @@ def video_loop():
                             # POSE & THEFT LOGIC
                             is_bending = check_bending(kpts)
                             is_facing_away = is_person_facing_away(kpts)
-                            
-                            if not model_is_specialized:
-                                process_theft_detection(
-                                    frame, box, kpts, detected_objects, 
-                                    cam_id, cam_data, name, p_state, 
-                                    current_time
-                                )
 
                             # ROI LOGIC — zone-aware
                             center_x = int((box[0] + box[2]) / 2)
@@ -351,6 +388,58 @@ def video_loop():
                                 cv2.putText(frame, "MERCADORIA - AREA MONITORADA", (box[0], box[1]-40),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
+                            # Risk-based theft detection (temporal sequence-aware).
+                            tracker_result = tracker.update(
+                                track_id=int(track_id),
+                                keypoints=kpts,
+                                object_boxes=detected_objects,
+                                bag_boxes=bag_boxes,
+                                roi_polys=merchandise_rois,
+                            )
+
+                            risk_level = tracker_result.get("level", "LOW")
+                            risk_score = tracker_result.get("risk", 0.0)
+                            risk_color = (0, 255, 0)
+                            if risk_level == "MEDIUM":
+                                risk_color = (0, 165, 255)
+                            elif risk_level in ("HIGH", "ALERT"):
+                                risk_color = (0, 0, 255)
+                            cv2.putText(
+                                frame,
+                                f"RISK {risk_level}: {risk_score:.2f}",
+                                (box[0], box[1] - 95),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.55,
+                                risk_color,
+                                2,
+                            )
+
+                            if should_trigger_theft_alert(tracker_result, detection_config):
+                                # Use dedicated theft cooldown so other alert types do not starve theft alerts.
+                                last_theft_alert_time = cam_data.get("last_theft_alert_time", 0)
+                                if current_time - last_theft_alert_time > ALERT_COOLDOWN:
+                                    cv2.putText(frame, "THEFT SEQUENCE CONFIRMED", (box[0], box[1]-80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
+                                    cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 3)
+                                    alert_payload_wrapper = {}
+                                    frame_buffer = get_camera_buffer(cam_data)
+                                    trigger_alert(
+                                        cam_id,
+                                        name,
+                                        f"THEFT RISK ALERT ({risk_level}) score={risk_score:.2f}",
+                                        frame,
+                                        alert_payload_wrapper,
+                                        frame_buffer,
+                                    )
+                                    cam_data["last_theft_alert_time"] = current_time
+                                    with lock:
+                                        alert_payload = alert_payload_wrapper.get('data')
+
+                                    events = tracker_result.get("events", [])
+                                    if events:
+                                        print(f"[THEFT_TRACKER] cam={cam_id} track={track_id} risk={risk_score:.2f} level={risk_level}")
+                                        for event in events:
+                                            print(f"  -> {event.get('type')}: {event.get('desc', '')}")
+
                             if is_bending:
                                 cv2.putText(frame, "BENDING", (box[0], box[1] + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
                             
@@ -365,6 +454,9 @@ def video_loop():
                                     merchandise_rois[0] if merchandise_rois else cam_roi,
                                     track_id, current_time
                                 )
+
+                    # Run cleanup once per frame to expire stale track states.
+                    tracker.cleanup()
 
                     # Apply heatmap overlay
                     frame = get_heatmap_overlay(cam_data, frame) 
@@ -541,41 +633,6 @@ def recognize_face(frame, box, encoding, cam_id, cam_data, cam_name, current_tim
                 cv2.putText(frame, f"VIP: {match_name}", (box[0], box[1]-30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
             return True
     return False
-
-
-def process_theft_detection(frame, box, kpts, detected_objects, cam_id, cam_data, cam_name, p_state, current_time):
-    """Process theft detection logic"""
-    left_has_obj = check_object_in_hand(kpts, detected_objects, "LEFT")
-    right_has_obj = check_object_in_hand(kpts, detected_objects, "RIGHT")
-    current_holding = left_has_obj or right_has_obj
-    holding_hand = "LEFT" if left_has_obj else "RIGHT" if right_has_obj else None
-
-    if current_holding:
-        p_state.holding_object = True
-        p_state.last_holding_time = current_time
-        p_state.holding_hand = holding_hand
-        cv2.putText(frame, f"HOLDING ({holding_hand})", (box[0], box[1]-60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0), 2)
-    
-    if p_state.holding_object and not current_holding:
-        time_since_hold = current_time - p_state.last_holding_time
-        if time_since_hold < 3.0: 
-            hand_to_check = p_state.holding_hand
-            if hand_to_check and check_concealment(kpts, hand_to_check):
-                cv2.putText(frame, "THEFT DETECTED!", (box[0], box[1]-80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 3)
-                if current_time - cam_data["last_alert_time"] > ALERT_COOLDOWN:
-                    global alert_payload
-                    alert_payload_wrapper = {}
-                    frame_buffer = get_camera_buffer(cam_data)
-                    trigger_alert(cam_id, cam_name, "THEFT CONFIRMED (Item Concealed)", frame, alert_payload_wrapper, frame_buffer)
-                    cam_data["last_alert_time"] = current_time
-                    p_state.holding_object = False
-                    with lock:
-                        alert_payload = alert_payload_wrapper.get('data')
-        else:
-            if time_since_hold > 3.0:
-                p_state.holding_object = False
-                p_state.holding_hand = None
 
 
 def process_loitering(frame, box, cam_data, cam_id, cam_name, cam_roi, track_id, current_time):

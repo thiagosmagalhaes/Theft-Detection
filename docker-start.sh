@@ -20,7 +20,22 @@ fi
 
 # Check if required files exist
 echo "📋 Checking required files..."
-required_files=("yolov8n-pose.pt" "yolov8n.pt" "cameras.json" "settings.json")
+pose_model="yolov8n-pose.pt"
+obj_model="yolov8n.pt"
+
+if [ -f ".env" ]; then
+    env_pose=$(grep -E '^YOLO_POSE_MODEL=' .env | tail -n 1 | cut -d '=' -f 2-)
+    env_obj=$(grep -E '^YOLO_OBJ_MODEL=' .env | tail -n 1 | cut -d '=' -f 2-)
+
+    if [ -n "$env_pose" ]; then
+        pose_model=$(echo "$env_pose" | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+    fi
+    if [ -n "$env_obj" ]; then
+        obj_model=$(echo "$env_obj" | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+    fi
+fi
+
+required_files=("$pose_model" "$obj_model" "cameras.json" "settings.json")
 for file in "${required_files[@]}"; do
     if [ ! -f "$file" ]; then
         echo "❌ Required file not found: $file"

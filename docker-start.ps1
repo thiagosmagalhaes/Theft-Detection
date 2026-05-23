@@ -22,7 +22,24 @@ try {
 
 # Check if required files exist
 Write-Host "Checking required files..." -ForegroundColor Yellow
-$requiredFiles = @("yolov8n-pose.pt", "yolov8n.pt", "cameras.json", "settings.json")
+$poseModel = "yolov8n-pose.pt"
+$objModel = "yolov8n.pt"
+
+if (Test-Path ".env") {
+    $envFile = Get-Content ".env"
+
+    $poseLine = $envFile | Where-Object { $_ -match '^\s*YOLO_POSE_MODEL\s*=' } | Select-Object -First 1
+    if ($poseLine) {
+        $poseModel = ($poseLine -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    }
+
+    $objLine = $envFile | Where-Object { $_ -match '^\s*YOLO_OBJ_MODEL\s*=' } | Select-Object -First 1
+    if ($objLine) {
+        $objModel = ($objLine -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    }
+}
+
+$requiredFiles = @($poseModel, $objModel, "cameras.json", "settings.json")
 foreach ($file in $requiredFiles) {
     if (-not (Test-Path $file)) {
         Write-Host "Required file not found: $file" -ForegroundColor Red

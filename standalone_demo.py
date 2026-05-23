@@ -4,6 +4,7 @@ import numpy as np
 import time
 import os
 from datetime import datetime
+from backend.config import YOLO_OBJ_MODEL
 
 # Global variables for ROI
 roi_points = []
@@ -47,7 +48,7 @@ def main():
     
     # Load the YOLOv8 model
     print("Model yükleniyor...")
-    model = YOLO('yolov8n.pt') 
+    model = YOLO(YOLO_OBJ_MODEL)
 
     # Open the webcam
     cap = cv2.VideoCapture(0)

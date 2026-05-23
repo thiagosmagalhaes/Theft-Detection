@@ -129,6 +129,7 @@ export default function CamerasPage() {
     height: ROI_CANVAS_HEIGHT,
   });
   const wsRef = useRef<WebSocket | null>(null);
+  const frameRenderTokenRef = useRef(0);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [showWizard, setShowWizard] = useState(false);
@@ -213,12 +214,13 @@ export default function CamerasPage() {
     };
 
     const drawCanvas = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       if (activeFrameBase64) {
+        const renderToken = ++frameRenderTokenRef.current;
         const img = new Image();
-        img.src = `data:image/jpeg;base64,${activeFrameBase64}`;
         img.onload = () => {
+          // Ignore delayed/stale frame loads; render only the latest frame.
+          if (frameRenderTokenRef.current !== renderToken) return;
+
           if (img.naturalWidth > 0 && img.naturalHeight > 0) {
             setFrameResolution((prev) =>
               prev.width === img.naturalWidth && prev.height === img.naturalHeight
@@ -226,10 +228,15 @@ export default function CamerasPage() {
                 : { width: img.naturalWidth, height: img.naturalHeight }
             );
           }
+
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           drawAllZones();
         };
+        img.src = `data:image/jpeg;base64,${activeFrameBase64}`;
       } else {
+        frameRenderTokenRef.current += 1;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#151824";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "rgba(255,255,255,0.4)";

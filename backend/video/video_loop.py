@@ -10,13 +10,12 @@ from ultralytics import YOLO
 
 from ..config import (
     YOLO_POSE_MODEL,
-    YOLO_OBJ_MODEL,
-    YOLO_SPECIALIZED_MODEL,
     TARGET_CLASSES,
     LOITERING_THRESHOLD,
     ALERT_COOLDOWN,
     MIN_BOX_SIZE,
     MIN_VISIBLE_KEYPOINTS,
+    OBJECT_DETECTION_INTERVAL,
     FACE_REC_AVAILABLE
 )
 from ..camera import CameraManager
@@ -28,7 +27,8 @@ from ..detection import (
     check_object_in_hand,
     check_concealment,
     check_bending,
-    is_person_facing_away
+    is_person_facing_away,
+    load_object_detector
 )
 from ..alerts import trigger_alert
 
@@ -113,7 +113,7 @@ def video_loop():
     global latest_frame, alert_payload, person_states
     
     print("Video Loop Başlatılıyor...") 
-    model_obj = None
+    object_detector = None
     model_is_specialized = False
     
     try:
@@ -121,18 +121,8 @@ def video_loop():
         model_pose = YOLO(YOLO_POSE_MODEL) 
         
         print("Loading Theft Detection Model...")
-        try:
-            # Try to load specialized model first
-            model_obj = YOLO(YOLO_SPECIALIZED_MODEL)
-            model_is_specialized = True
-            print("Özel Hırsızlık Modeli Yüklendi! (shoplifting.pt)")
-        except:
-            print("Özel model bulunamadı, standart nesne takibine (yolov8n.pt) geçiliyor...")
-            try:
-                model_obj = YOLO(YOLO_OBJ_MODEL)
-            except Exception as e:
-                print(f"Standart Model de yüklenemedi: {e}")
-                model_obj = None
+        object_detector = load_object_detector()
+        model_is_specialized = getattr(object_detector, "is_specialized", False)
 
         print("Modeller hazır.")
     except Exception as e:
@@ -152,8 +142,8 @@ def video_loop():
 
             frames_payload = [] 
             
-            # Optimization: Run Object Det every 5 frames
-            run_obj_det = (frame_count % 5 == 0) and (model_obj is not None)
+            # Object detection runs at a configurable interval to balance accuracy/performance.
+            run_obj_det = (frame_count % max(1, OBJECT_DETECTION_INTERVAL) == 0) and (object_detector is not None)
             
             for cam_id, cam_data in current_cams:
                 cap = cam_data["cap"]
@@ -194,55 +184,70 @@ def video_loop():
                 if cap.isOpened() and 'ret' in locals() and ret:
                     # 1. POSE INFERENCE (Every Frame for tracking)
                     results_pose = model_pose.track(frame, persist=True, verbose=False, classes=[0], conf=0.5) 
+                    if results_pose and results_pose[0].keypoints is not None:
+                        # Draw pose first so later custom overlays (object boxes/alerts) are preserved.
+                        frame = results_pose[0].plot(img=frame)
                     
                     # 2. THEFT / OBJECT INFERENCE
                     detected_objects = []
                     suspicious_activity_detected = False
-                    
-                    if run_obj_det:
-                        if model_is_specialized:
-                            results_obj = model_obj(frame, verbose=False, conf=0.4)
-                            if len(results_obj) > 0:
-                                boxes = results_obj[0].boxes.xyxy.cpu().numpy().astype(int)
-                                clss = results_obj[0].boxes.cls.cpu().numpy().astype(int)
-                                confs = results_obj[0].boxes.conf.cpu().numpy()
-                                
-                                for b, c, conf in zip(boxes, clss, confs):
-                                    class_name = model_obj.names[c].lower()
-                                    if "shoplift" in class_name or "suspicious" in class_name or "theft" in class_name or "fight" in class_name:
-                                        label = f"{class_name.upper()} {conf:.2f}"
-                                        cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 3)
-                                        cv2.putText(frame, label, (b[0], b[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                                        suspicious_activity_detected = True
-                                        
-                                        if current_time - cam_data["last_alert_time"] > ALERT_COOLDOWN:
-                                            alert_payload_wrapper = {}
-                                            frame_buffer = get_camera_buffer(cam_data)
-                                            trigger_alert(cam_id, name, f"CRIMINAL ACTIVITY: {class_name}", frame, alert_payload_wrapper, frame_buffer)
-                                            cam_data["last_alert_time"] = current_time
-                                            with lock:
-                                                alert_payload = alert_payload_wrapper.get('data')
-                                    else:
-                                        cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 255, 0), 1)
+
+                    if object_detector is not None:
+                        if run_obj_det:
+                            detections = object_detector.predict(frame)
+                            cam_data["last_detections"] = detections
                         else:
-                            # Fallback Logic - Target classes for stealable items
-                            results_obj = model_obj(frame, verbose=False, conf=0.3) 
-                            if len(results_obj) > 0:
-                                boxes_obj = results_obj[0].boxes.xyxy.cpu().numpy().astype(int)
-                                cls_obj = results_obj[0].boxes.cls.cpu().numpy().astype(int)
-                                conf_obj = results_obj[0].boxes.conf.cpu().numpy()
-                                
-                                for b, c, conf in zip(boxes_obj, cls_obj, conf_obj):
-                                    if c in TARGET_CLASSES: 
-                                        detected_objects.append(b)
-                                        label = f"ITEM: {model_obj.names[c]} {conf:.2f}"
-                                        cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 165, 255), 2)
-                                        cv2.putText(frame, label, (b[0], b[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
-                    
-                    if run_obj_det:
-                        cam_data["last_objects"] = detected_objects
-                    else:
-                        detected_objects = cam_data.get("last_objects", [])
+                            detections = cam_data.get("last_detections", [])
+
+                        if model_is_specialized:
+                            for det in detections:
+                                b = det.box
+                                class_name = det.class_name.lower()
+                                conf = det.confidence
+                                is_suspicious = (
+                                    "shoplift" in class_name
+                                    or "suspicious" in class_name
+                                    or "theft" in class_name
+                                    or "fight" in class_name
+                                )
+
+                                if is_suspicious:
+                                    label = f"{class_name.upper()} {conf:.2f}"
+                                    cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 3)
+                                    cv2.putText(frame, label, (b[0], b[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                                    suspicious_activity_detected = True
+
+                                    # Trigger alerts only on fresh detections to avoid stale-alert loops.
+                                    if run_obj_det and current_time - cam_data["last_alert_time"] > ALERT_COOLDOWN:
+                                        alert_payload_wrapper = {}
+                                        frame_buffer = get_camera_buffer(cam_data)
+                                        trigger_alert(cam_id, name, f"CRIMINAL ACTIVITY: {class_name}", frame, alert_payload_wrapper, frame_buffer)
+                                        cam_data["last_alert_time"] = current_time
+                                        with lock:
+                                            alert_payload = alert_payload_wrapper.get('data')
+                                else:
+                                    label = f"{det.class_name} {conf:.2f}"
+                                    cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 255, 0), 1)
+                                    cv2.putText(frame, label, (b[0], max(20, b[1] - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+                        else:
+                            # Generic object path (YOLO or RF-DETR): show all labels,
+                            # but keep theft logic restricted to target classes.
+                            for det in detections:
+                                b = det.box
+                                c = det.class_id
+                                conf = det.confidence
+
+                                is_target = c in TARGET_CLASSES
+                                label = f"{det.class_name} {conf:.2f}"
+                                color = (0, 165, 255) if is_target else (180, 180, 180)
+                                thickness = 2 if is_target else 1
+                                cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), color, thickness)
+                                cv2.putText(frame, label, (b[0], max(20, b[1] - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+                                if is_target:
+                                    detected_objects.append(b)
+
+                    cam_data["last_objects"] = detected_objects
 
                     # 3. PROCESS DETECTIONS
                     if results_pose[0].boxes.id is not None:
@@ -364,11 +369,6 @@ def video_loop():
                     # Apply heatmap overlay
                     frame = get_heatmap_overlay(cam_data, frame) 
                     
-                    # Plot keypoints
-                    if results_pose[0].keypoints is not None:
-                        res_plotted = results_pose[0].plot()
-                        frame = res_plotted
-
                     # Draw all ROI zones with type-specific colours
                     zone_colours = {
                         "merchandise": (0, 200, 255),   # amber/orange

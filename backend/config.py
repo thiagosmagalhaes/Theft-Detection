@@ -13,6 +13,11 @@ SETTINGS_FILE = "settings.json"
 DB_NAME = "theft_detection.db"
 CAMERAS_FILE = "cameras.json"
 
+# YOLO Tracking Configuration (Ultralytics Solutions best practices)
+TRACKER_TYPE = os.getenv("TRACKER_TYPE", "botsort.yaml").strip()  # or "bytetrack.yaml"
+TRACKER_CONF = float(os.getenv("TRACKER_CONF", "0.5"))  # Confidence threshold
+TRACKER_IOU = float(os.getenv("TRACKER_IOU", "0.5"))  # IoU threshold for NMS
+
 # Detection thresholds
 LOITERING_THRESHOLD = 5.0
 ALERT_COOLDOWN = 3.0

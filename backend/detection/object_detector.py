@@ -13,6 +13,9 @@ from ..config import (
     OBJECT_DETECTION_CONFIDENCE,
     OBJECT_DETECTOR_BACKEND,
     RF_DETR_MODEL_ID,
+    TRACKER_TYPE,
+    TRACKER_CONF,
+    TRACKER_IOU,
 )
 
 
@@ -22,6 +25,7 @@ class ObjectDetection:
     class_id: int
     class_name: str
     confidence: float
+    track_id: int = None  # YOLO tracking ID for persistence across frames
 
 
 class YoloObjectDetector:
@@ -46,7 +50,16 @@ class YoloObjectDetector:
         self.class_names: Dict[int, str] = {int(k): str(v) for k, v in names.items()}
 
     def predict(self, frame: np.ndarray) -> List[ObjectDetection]:
-        results = self.model(frame, verbose=False, conf=OBJECT_DETECTION_CONFIDENCE)
+        # Use YOLO tracking to maintain consistent object IDs across frames
+        # This helps prevent flickering by tracking objects even when confidence drops temporarily
+        results = self.model.track(
+            frame, 
+            verbose=False, 
+            conf=OBJECT_DETECTION_CONFIDENCE,
+            tracker=TRACKER_TYPE,
+            persist=True  # Keep track IDs consistent across frames
+        )
+        
         detections: List[ObjectDetection] = []
 
         if not results:
@@ -59,14 +72,22 @@ class YoloObjectDetector:
         xyxy = boxes.xyxy.cpu().numpy().astype(int)
         clss = boxes.cls.cpu().numpy().astype(int)
         confs = boxes.conf.cpu().numpy()
+        
+        # Get tracking IDs if available
+        track_ids = None
+        if hasattr(boxes, 'id') and boxes.id is not None:
+            track_ids = boxes.id.cpu().numpy().astype(int)
 
-        for box, class_id, conf in zip(xyxy, clss, confs):
+        for i, (box, class_id, conf) in enumerate(zip(xyxy, clss, confs)):
+            track_id = int(track_ids[i]) if track_ids is not None else None
+            
             detections.append(
                 ObjectDetection(
                     box=[int(box[0]), int(box[1]), int(box[2]), int(box[3])],
                     class_id=int(class_id),
                     class_name=self.class_names.get(int(class_id), str(class_id)),
                     confidence=float(conf),
+                    track_id=track_id,
                 )
             )
 

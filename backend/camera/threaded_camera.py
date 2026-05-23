@@ -71,6 +71,15 @@ class ThreadedCamera:
 
     def isOpened(self):
         return self.cap.isOpened()
+
+    def get(self, prop_id):
+        """Proxy VideoCapture.get for compatibility with existing loop code."""
+        if self.cap is None:
+            return 0
+        try:
+            return self.cap.get(prop_id)
+        except Exception:
+            return 0
     
     def get_buffer_frames(self):
         """Get frames from the video buffer for alert recording"""

@@ -16,7 +16,10 @@ from ..config import (
     MIN_BOX_SIZE,
     MIN_VISIBLE_KEYPOINTS,
     OBJECT_DETECTION_INTERVAL,
-    FACE_REC_AVAILABLE
+    FACE_REC_AVAILABLE,
+    TRACKER_TYPE,
+    TRACKER_CONF,
+    TRACKER_IOU,
 )
 from ..camera import CameraManager
 from ..models.person_state import PersonState
@@ -29,8 +32,10 @@ from ..detection import (
     load_object_detector,
     TheftBehaviorTracker,
 )
+from ..detection.object_detector import ObjectDetection
 from ..api.detection_config import get_detection_config
 from ..alerts import trigger_alert
+from ..database import insert_zone_event
 
 # Global state
 camera_manager = CameraManager()
@@ -126,6 +131,285 @@ def is_valid_polygon(points, min_area=100.0):
     return area >= min_area
 
 
+def _bbox_center(box):
+    return ((box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5)
+
+
+def _bbox_iou(box_a, box_b):
+    x_left = max(box_a[0], box_b[0])
+    y_top = max(box_a[1], box_b[1])
+    x_right = min(box_a[2], box_b[2])
+    y_bottom = min(box_a[3], box_b[3])
+
+    if x_right <= x_left or y_bottom <= y_top:
+        return 0.0
+
+    inter = float((x_right - x_left) * (y_bottom - y_top))
+    area_a = float(max(1, (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])))
+    area_b = float(max(1, (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])))
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _is_box_inside_any_merchandise_roi(box, merchandise_rois):
+    """Check if bounding box is inside any ROI zone.
+    
+    Uses multiple sampling points (center + corners) for robust detection.
+    Following Ultralytics Solutions pattern for region-based object tracking.
+    
+    Args:
+        box: Bounding box [x1, y1, x2, y2]
+        merchandise_rois: List of ROI polygons as list of (x, y) tuples
+        
+    Returns:
+        bool: True if object is considered inside any ROI
+    """
+    if not merchandise_rois:
+        return False
+    x1, y1, x2, y2 = box
+    cx, cy = _bbox_center(box)
+    
+    # Sample multiple points for robust detection (Ultralytics pattern)
+    sample_points = [
+        (int(cx), int(cy)),  # center (most important)
+        (int(x1), int(y1)),  # top-left
+        (int(x2), int(y1)),  # top-right
+        (int(x1), int(y2)),  # bottom-left
+        (int(x2), int(y2)),  # bottom-right
+    ]
+    
+    for roi in merchandise_rois:
+        if len(roi) < 3:
+            continue
+        roi_np = np.array(roi, dtype=np.int32)
+        inside_count = 0
+        for point in sample_points:
+            if cv2.pointPolygonTest(roi_np, point, False) >= 0:
+                inside_count += 1
+        
+        # Consider inside if center + at least one corner is in zone
+        # This handles edge cases better than center-only detection
+        if inside_count >= 2:
+            return True
+    return False
+
+
+def update_detection_history(cam_data, detections, max_age_frames=5):
+    """
+    Track detection history for temporal smoothing to reduce flickering.
+    
+    Maintains a history of recent detections for each track_id. When detections
+    are temporarily lost (confidence drops, occlusion, etc), we can draw "ghost"
+    bounding boxes at predicted positions to maintain visual consistency.
+    
+    Args:
+        cam_data: Camera data dictionary with persistent state
+        detections: List of current ObjectDetection instances
+        max_age_frames: Maximum frames to keep a ghost detection (default: 5)
+    
+    Returns:
+        list: Ghost detections to draw (detections that weren't seen this frame)
+    """
+    history = cam_data.setdefault("detection_history", {})
+    current_track_ids = set()
+    ghost_detections = []
+    
+    # Update history with current detections
+    for det in detections:
+        if det.track_id is not None:
+            current_track_ids.add(det.track_id)
+            history[det.track_id] = {
+                "detection": det,
+                "age": 0,  # Fresh detection
+                "last_box": det.box,
+                "last_confidence": det.confidence,
+            }
+    
+    # Find ghost detections (missing this frame but recently seen)
+    to_remove = []
+    for track_id, info in history.items():
+        if track_id not in current_track_ids:
+            # Detection missing this frame
+            info["age"] += 1
+            
+            if info["age"] <= max_age_frames:
+                # Create ghost detection with decayed confidence
+                decay_factor = 1.0 - (info["age"] / max_age_frames)
+                ghost_det = ObjectDetection(
+                    box=info["last_box"],
+                    class_id=info["detection"].class_id,
+                    class_name=info["detection"].class_name,
+                    confidence=info["last_confidence"] * decay_factor,
+                    track_id=track_id,
+                )
+                ghost_detections.append(("ghost", ghost_det, decay_factor))
+            else:
+                # Too old, remove from history
+                to_remove.append(track_id)
+    
+    # Clean up old entries
+    for track_id in to_remove:
+        del history[track_id]
+    
+    return ghost_detections
+
+
+def update_zone_object_states(cam_data, detections, merchandise_rois, camera_id=None):
+    """Track objects that left merchandise zones and keep them red until they return.
+    
+    Implements zone-based object tracking following Ultralytics Solutions pattern.
+    Similar to 'Track Objects in Zone' but with removal detection logic.
+    Logs all zone events to database for historical tracking and analytics.
+    
+    Args:
+        cam_data: Camera data dictionary with persistent state
+        detections: List of ObjectDetection instances
+        merchandise_rois: List of ROI polygons to monitor
+        camera_id: Camera ID for database logging
+        
+    Returns:
+        set: Indices of detections that should be highlighted as removed
+    """
+    states = cam_data.setdefault("zone_object_states", [])
+    removed_detection_indexes = set()
+
+    if not detections:
+        # Keep state for a short time in case of occlusion, then discard.
+        kept = []
+        for st in states:
+            st["missing_frames"] = int(st.get("missing_frames", 0)) + 1
+            if st["missing_frames"] <= 30:
+                kept.append(st)
+        cam_data["zone_object_states"] = kept
+        return removed_detection_indexes
+
+    used_state_indexes = set()
+    updated_states = []
+
+    for det_index, det in enumerate(detections):
+        class_id = int(det.class_id)
+        class_name = det.class_name
+        track_id = det.track_id
+        # Track ALL detected objects, not just TARGET_CLASSES
+        # if class_id not in TARGET_CLASSES:
+        #     continue
+
+        current_box = [int(v) for v in det.box]
+        current_center = _bbox_center(current_box)
+        confidence = float(det.confidence)
+
+        best_idx = -1
+        best_score = -1.0
+        for st_idx, st in enumerate(states):
+            if st_idx in used_state_indexes:
+                continue
+            # Match by track_id first (if available), then by class_id
+            if track_id is not None and st.get("track_id") is not None:
+                if st.get("track_id") != track_id:
+                    continue
+            elif int(st.get("class_id", -1)) != class_id:
+                continue
+
+            prev_box = st.get("box", current_box)
+            prev_center = _bbox_center(prev_box)
+            dx = current_center[0] - prev_center[0]
+            dy = current_center[1] - prev_center[1]
+            center_dist = float(np.sqrt(dx * dx + dy * dy))
+            iou = _bbox_iou(current_box, prev_box)
+
+            # Accept if reasonably close or overlapping.
+            if center_dist > 180 and iou < 0.05:
+                continue
+
+            score = (iou * 2.0) + max(0.0, 1.0 - (center_dist / 200.0))
+            if score > best_score:
+                best_score = score
+                best_idx = st_idx
+
+        if best_idx >= 0:
+            state = states[best_idx]
+            used_state_indexes.add(best_idx)
+        else:
+            state = {
+                "class_id": class_id,
+                "class_name": class_name,
+                "track_id": track_id,
+                "box": current_box,
+                "armed": False,
+                "removed": False,
+                "missing_frames": 0,
+            }
+
+        is_inside_merchandise = _is_box_inside_any_merchandise_roi(current_box, merchandise_rois)
+
+        state["box"] = current_box
+        state["track_id"] = track_id  # Update track_id
+        state["missing_frames"] = 0
+
+        if is_inside_merchandise:
+            # Object returned to zone -> clear removed state.
+            if not state.get("armed", False):
+                print(f"[ZONE] Object class {class_name} (track_id={track_id}) entered zone (armed)")
+                # Log "entered" event to database
+                if camera_id:
+                    insert_zone_event(
+                        camera_id=camera_id,
+                        zone_name="Merchandise Zone",
+                        object_class=class_name,
+                        object_id=track_id,
+                        event_type="entered",
+                        bbox=current_box,
+                        confidence=confidence
+                    )
+            elif state.get("removed", False):
+                print(f"[ZONE] Object class {class_name} (track_id={track_id}) RETURNED to zone (cleared removed state)")
+                # Log "returned" event (exited → entered transition)
+                if camera_id:
+                    insert_zone_event(
+                        camera_id=camera_id,
+                        zone_name="Merchandise Zone",
+                        object_class=class_name,
+                        object_id=track_id,
+                        event_type="entered",  # Re-entry
+                        bbox=current_box,
+                        confidence=confidence
+                    )
+            state["armed"] = True
+            state["removed"] = False
+        elif state.get("armed", False):
+            # Object has already been in zone and is now out.
+            if not state.get("removed", False):
+                print(f"[ZONE] ⚠️ Object class {class_name} (track_id={track_id}) REMOVED from zone (flagging RED)")
+                # Log "removed" event to database
+                if camera_id:
+                    insert_zone_event(
+                        camera_id=camera_id,
+                        zone_name="Merchandise Zone",
+                        object_class=class_name,
+                        object_id=track_id,
+                        event_type="removed",
+                        bbox=current_box,
+                        confidence=confidence
+                    )
+            state["removed"] = True
+
+        if state.get("removed", False):
+            removed_detection_indexes.add(det_index)
+
+        updated_states.append(state)
+
+    # Keep unmatched states briefly to survive short occlusions.
+    for st_idx, st in enumerate(states):
+        if st_idx in used_state_indexes:
+            continue
+        st["missing_frames"] = int(st.get("missing_frames", 0)) + 1
+        if st["missing_frames"] <= 30:
+            updated_states.append(st)
+
+    cam_data["zone_object_states"] = updated_states
+    return removed_detection_indexes
+
+
 def video_loop():
     """Main video processing loop"""
     global latest_frame, alert_payload, person_states, theft_trackers
@@ -141,6 +425,11 @@ def video_loop():
         print("Loading Theft Detection Model...")
         object_detector = load_object_detector()
         model_is_specialized = getattr(object_detector, "is_specialized", False)
+        
+        if model_is_specialized:
+            print("✓ Using SPECIALIZED shoplifting model")
+        else:
+            print("✓ Using GENERIC object detection model")
 
         print("Modeller hazır.")
     except Exception as e:
@@ -206,6 +495,10 @@ def video_loop():
                     resolve_roi_points_for_frame(z.get("points", []), frame.shape)
                     for z in raw_zones if z.get("zone_type") == "merchandise"
                 ]
+                all_zone_rois = [
+                    resolve_roi_points_for_frame(z.get("points", []), frame.shape)
+                    for z in raw_zones
+                ]
                 forbidden_rois = [
                     resolve_roi_points_for_frame(z.get("points", []), frame.shape)
                     for z in raw_zones if z.get("zone_type") == "forbidden"
@@ -215,15 +508,37 @@ def video_loop():
                     for z in raw_zones if z.get("zone_type") == "entry"
                 ]
                 merchandise_rois = [z for z in merchandise_rois if is_valid_polygon(z)]
+                all_zone_rois = [z for z in all_zone_rois if is_valid_polygon(z)]
                 forbidden_rois = [z for z in forbidden_rois if is_valid_polygon(z)]
                 entry_rois = [z for z in entry_rois if is_valid_polygon(z)]
                 # Fallback: treat legacy single roi_points as merchandise zone
                 if not merchandise_rois and is_valid_polygon(cam_roi):
                     merchandise_rois = [cam_roi]
 
+                # Highlighting rule: prefer merchandise zones, fallback to any configured zone.
+                monitored_object_rois = merchandise_rois if merchandise_rois else all_zone_rois
+                if not monitored_object_rois and is_valid_polygon(cam_roi):
+                    monitored_object_rois = [cam_roi]
+                
+                # Debug: show zone count once per camera (only on first 10 frames)
+                if frame_count < 10 and frame_count % 3 == 0:
+                    print(f"[ZONE DEBUG] Cam {cam_id}: {len(monitored_object_rois)} monitored zones active")
+
                 if cap.isOpened() and 'ret' in locals() and ret:
                     # 1. POSE INFERENCE (Every Frame for tracking)
-                    results_pose = model_pose.track(frame, persist=True, verbose=False, classes=[0], conf=0.5) 
+                    # Using configurable tracker for better person tracking consistency
+                    # Based on Ultralytics Solutions best practices
+                    results_pose = model_pose.track(
+                        frame, 
+                        persist=True, 
+                        verbose=False, 
+                        classes=[0],  # person class only
+                        conf=TRACKER_CONF,  # Configurable confidence
+                        iou=TRACKER_IOU,   # Configurable IoU threshold
+                        tracker=TRACKER_TYPE,  # botsort.yaml or bytetrack.yaml
+                        show_labels=False,
+                        show_conf=False,
+                    ) 
                     if results_pose and results_pose[0].keypoints is not None:
                         # Draw pose first so later custom overlays (object boxes/alerts) are preserved.
                         frame = results_pose[0].plot(img=frame)
@@ -236,12 +551,27 @@ def video_loop():
                     if object_detector is not None:
                         if run_obj_det:
                             detections = object_detector.predict(frame)
+                            # Filter low-confidence detections for cleaner results
+                            detections = [d for d in detections if d.confidence >= 0.25]
                             cam_data["last_detections"] = detections
                         else:
                             detections = cam_data.get("last_detections", [])
 
+                        # TEMPORAL SMOOTHING: Get ghost detections to reduce flickering
+                        # Ghost detections are recently-seen objects that weren't detected this frame
+                        # but are still being tracked (helps with transient occlusions/confidence drops)
+                        ghost_detections = update_detection_history(cam_data, detections, max_age_frames=5)
+
                         if model_is_specialized:
-                            for det in detections:
+                            # Track removed objects for specialized model too
+                            removed_object_indexes = update_zone_object_states(
+                                cam_data,
+                                detections,
+                                monitored_object_rois,
+                                camera_id=cam_id,
+                            )
+                            
+                            for det_index, det in enumerate(detections):
                                 b = det.box
                                 class_name = det.class_name.lower()
                                 conf = det.confidence
@@ -267,23 +597,77 @@ def video_loop():
                                         with lock:
                                             alert_payload = alert_payload_wrapper.get('data')
                                 else:
-                                    label = f"{det.class_name} {conf:.2f}"
-                                    cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), (0, 255, 0), 1)
-                                    cv2.putText(frame, label, (b[0], max(20, b[1] - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+                                    # Check if object was removed from zone
+                                    if det_index in removed_object_indexes:
+                                        label = f"FORA DA ZONA: {det.class_name} {conf:.2f}"
+                                        color = (0, 0, 255)  # Red
+                                        thickness = 3
+                                    else:
+                                        label = f"{det.class_name} {conf:.2f}"
+                                        color = (0, 255, 0)  # Green
+                                        thickness = 1
+                                    
+                                    # Draw bounding box
+                                    cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), color, thickness)
+                                    
+                                    # Draw label with background for better readability (Ultralytics pattern)
+                                    text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                                    label_y = max(20, b[1] - 8)
+                                    cv2.rectangle(
+                                        frame,
+                                        (b[0], label_y - text_size[1] - 4),
+                                        (b[0] + text_size[0] + 4, label_y + 2),
+                                        color,
+                                        -1,  # Filled rectangle
+                                    )
+                                    cv2.putText(
+                                        frame, label, (b[0] + 2, label_y - 2),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
+                                    )
                         else:
                             # Generic object path (YOLO or RF-DETR): show all labels,
                             # but keep theft logic restricted to target classes.
-                            for det in detections:
+                            removed_object_indexes = update_zone_object_states(
+                                cam_data,
+                                detections,
+                                monitored_object_rois,
+                                camera_id=cam_id,
+                            )
+
+                            for det_index, det in enumerate(detections):
                                 b = det.box
                                 c = det.class_id
                                 conf = det.confidence
 
                                 is_target = c in TARGET_CLASSES
-                                label = f"{det.class_name} {conf:.2f}"
-                                color = (0, 165, 255) if is_target else (180, 180, 180)
-                                thickness = 2 if is_target else 1
+                                
+                                # Determine color and label based on zone status
+                                if det_index in removed_object_indexes:
+                                    color = (0, 0, 255)  # Red - removed from zone
+                                    thickness = 3
+                                    label = f"FORA DA ZONA: {det.class_name} {conf:.2f}"
+                                else:
+                                    color = (0, 165, 255) if is_target else (180, 180, 180)
+                                    thickness = 2 if is_target else 1
+                                    label = f"{det.class_name} {conf:.2f}"
+                                
+                                # Draw bounding box
                                 cv2.rectangle(frame, (b[0], b[1]), (b[2], b[3]), color, thickness)
-                                cv2.putText(frame, label, (b[0], max(20, b[1] - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                                
+                                # Draw label with background for better visibility (Ultralytics Solutions pattern)
+                                text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                                label_y = max(20, b[1] - 8)
+                                cv2.rectangle(
+                                    frame,
+                                    (b[0], label_y - text_size[1] - 4),
+                                    (b[0] + text_size[0] + 4, label_y + 2),
+                                    color,
+                                    -1,  # Filled
+                                )
+                                cv2.putText(
+                                    frame, label, (b[0] + 2, label_y - 2),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
+                                )
 
                                 if is_target:
                                     if c in BAG_CLASS_IDS:
@@ -292,6 +676,40 @@ def video_loop():
                                         detected_objects.append(b)
 
                     cam_data["last_objects"] = detected_objects
+
+                    # DRAW GHOST DETECTIONS (temporal smoothing for visual stability)
+                    # Ghost detections are drawn semi-transparently to indicate they weren't
+                    # detected this frame but are being tracked from recent history
+                    if ghost_detections:
+                        overlay = frame.copy()
+                        for ghost_type, ghost_det, decay_factor in ghost_detections:
+                            b = ghost_det.box
+                            conf = ghost_det.confidence
+                            
+                            # Semi-transparent gray color (opacity based on decay)
+                            # More recent = more opaque, older = more transparent
+                            alpha = 0.3 * decay_factor
+                            color = (128, 128, 128)  # Gray for ghost objects
+                            
+                            # Draw on overlay
+                            cv2.rectangle(overlay, (b[0], b[1]), (b[2], b[3]), color, 2)
+                            label = f"[TRACK] {ghost_det.class_name} {conf:.2f}"
+                            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+                            label_y = max(20, b[1] - 8)
+                            cv2.rectangle(
+                                overlay,
+                                (b[0], label_y - text_size[1] - 4),
+                                (b[0] + text_size[0] + 4, label_y + 2),
+                                color,
+                                -1,
+                            )
+                            cv2.putText(
+                                overlay, label, (b[0] + 2, label_y - 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1
+                            )
+                        
+                        # Blend overlay with frame
+                        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
                     # 3. PROCESS DETECTIONS
                     if results_pose[0].boxes.id is not None:
@@ -462,6 +880,7 @@ def video_loop():
                     frame = get_heatmap_overlay(cam_data, frame) 
                     
                     # Draw all ROI zones with type-specific colours
+                    # Following Ultralytics Solutions pattern for region annotation
                     zone_colours = {
                         "merchandise": (0, 200, 255),   # amber/orange
                         "forbidden":   (0, 0, 220),     # red
@@ -470,12 +889,37 @@ def video_loop():
                     for z in raw_zones:
                         pts = resolve_roi_points_for_frame(z.get("points", []), frame.shape)
                         if is_valid_polygon(pts):
-                            colour = zone_colours.get(z.get("zone_type", "merchandise"), (0, 200, 255))
-                            cv2.polylines(frame, [np.array(pts, dtype=np.int32)], isClosed=True, color=colour, thickness=2)
-                            # Label in top-left corner of zone bounding box
+                            zone_type = z.get("zone_type", "merchandise")
+                            colour = zone_colours.get(zone_type, (0, 200, 255))
+                            zone_name = z.get("name", "Zona")
+                            
+                            # Draw zone polygon with semi-transparent fill
+                            pts_array = np.array(pts, dtype=np.int32)
+                            overlay = frame.copy()
+                            cv2.fillPoly(overlay, [pts_array], colour)
+                            cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)  # 15% transparency
+                            
+                            # Draw zone border
+                            cv2.polylines(frame, [pts_array], isClosed=True, color=colour, thickness=3)
+                            
+                            # Draw zone label with background (Ultralytics pattern)
                             xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
-                            cv2.putText(frame, z.get("name", "Zona"), (min(xs), min(ys) - 6),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1)
+                            label_x, label_y = min(xs) + 5, min(ys) + 20
+                            text_size = cv2.getTextSize(zone_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                            
+                            # Background rectangle for label
+                            cv2.rectangle(
+                                frame,
+                                (label_x - 3, label_y - text_size[1] - 6),
+                                (label_x + text_size[0] + 3, label_y + 3),
+                                colour,
+                                -1,  # Filled
+                            )
+                            # Label text
+                            cv2.putText(
+                                frame, zone_name, (label_x, label_y - 3),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
+                            )
                     # Legacy single roi_points (if no zones defined)
                     if (not raw_zones or not any(is_valid_polygon(resolve_roi_points_for_frame(z.get("points", []), frame.shape)) for z in raw_zones)) and is_valid_polygon(cam_roi):
                         cv2.polylines(frame, [np.array(cam_roi, dtype=np.int32)], isClosed=True, color=(0, 255, 255), thickness=2)

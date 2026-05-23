@@ -24,19 +24,18 @@ interface WsPayload {
 }
 
 // Componente de câmera individual memoizado para evitar re-renders desnecessários
-const CameraFeedDisplay = memo(({ cam, isAlerting, alertMessage }: { 
-  cam: CameraFeed; 
-  isAlerting: boolean; 
+const CameraFeedDisplay = memo(({ cam, isAlerting, alertMessage }: {
+  cam: CameraFeed;
+  isAlerting: boolean;
   alertMessage: string;
 }) => {
   // Memoize a URL da imagem para evitar recriar a string em cada render
   const imageSrc = useMemo(() => `data:image/jpeg;base64,${cam.data}`, [cam.data]);
 
   return (
-    <div 
-      className={`glass-panel overflow-hidden relative group transition-all duration-300 ${
-        isAlerting ? "alert-pulse ring-2 ring-danger" : ""
-      }`}
+    <div
+      className={`glass-panel overflow-hidden relative group transition-all duration-300 ${isAlerting ? "alert-pulse ring-2 ring-danger" : ""
+        }`}
     >
       <div className="absolute top-0 left-0 right-0 glass-header p-2 flex justify-between items-center z-10">
         <div className="flex items-center gap-2">
@@ -55,9 +54,9 @@ const CameraFeedDisplay = memo(({ cam, isAlerting, alertMessage }: {
           </button>
         </div>
       </div>
-      
+
       <div className="aspect-video bg-black/40 relative flex items-center justify-center overflow-hidden">
-        <img 
+        <img
           src={imageSrc}
           alt={cam.name}
           className="w-full h-full object-contain"
@@ -103,27 +102,27 @@ export default function CameraGrid() {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return;
       const ctx = new AudioContextClass();
-      
+
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      
+
       osc.type = "sine";
       const now = ctx.currentTime;
-      
+
       // Realistic security siren alarm frequency sweep
       osc.frequency.setValueAtTime(580, now);
       osc.frequency.linearRampToValueAtTime(950, now + 0.35);
       osc.frequency.linearRampToValueAtTime(580, now + 0.7);
       osc.frequency.linearRampToValueAtTime(950, now + 1.05);
       osc.frequency.linearRampToValueAtTime(580, now + 1.4);
-      
+
       osc.connect(gain);
       gain.connect(ctx.destination);
-      
+
       gain.gain.setValueAtTime(0.2, now);
       gain.gain.linearRampToValueAtTime(0.2, now + 1.2);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 1.4);
-      
+
       osc.start(now);
       osc.stop(now + 1.4);
     } catch (e) {
@@ -150,14 +149,14 @@ export default function CameraGrid() {
           const payload: WsPayload = JSON.parse(event.data);
           if (payload.type === "multi_frame") {
             setCameras(payload.cameras);
-            
+
             if (payload.alert) {
               setAlertCam(payload.alert.camera_id);
               setAlertMessage(payload.alert.message);
-              
+
               // Play dynamic synthetic alarm sound
               playSiren();
-              
+
               if (alertTimeoutRef.current) {
                 clearTimeout(alertTimeoutRef.current);
               }
@@ -177,7 +176,7 @@ export default function CameraGrid() {
         console.log("WebSocket disconnected. Reconnecting...");
         reconnectInterval = setTimeout(connectWebSocket, 3000);
       };
-      
+
       ws.onerror = (err) => {
         console.error("WebSocket error", err);
         ws.close();

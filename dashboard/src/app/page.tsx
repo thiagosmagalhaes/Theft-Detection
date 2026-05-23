@@ -124,7 +124,7 @@ export default function Home() {
 
       <h3 className="text-xl font-semibold mb-4">Live Feeds</h3>
       <CameraGrid />
-      
+
       <div className="mt-8">
         <StatsCharts />
       </div>

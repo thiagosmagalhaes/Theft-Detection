@@ -499,8 +499,8 @@ export default function CamerasPage() {
       {message && (
         <div
           className={`mb-6 p-4 rounded-lg flex items-center gap-3 border ${message.type === "success"
-              ? "bg-green-500/10 border-green-500/30 text-green-400"
-              : "bg-danger/10 border-danger/30 text-danger"
+            ? "bg-green-500/10 border-green-500/30 text-green-400"
+            : "bg-danger/10 border-danger/30 text-danger"
             }`}
         >
           {message.type === "success" ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
@@ -595,8 +595,8 @@ export default function CamerasPage() {
                     <div className="flex items-center gap-3">
                       <div
                         className={`w-10 h-10 rounded-full flex items-center justify-center border ${cam.status === "active"
-                            ? "bg-green-500/10 border-green-500/30 text-green-400"
-                            : "bg-danger/10 border-danger/30 text-danger"
+                          ? "bg-green-500/10 border-green-500/30 text-green-400"
+                          : "bg-danger/10 border-danger/30 text-danger"
                           }`}
                       >
                         <Camera className="w-5 h-5" />
@@ -605,8 +605,8 @@ export default function CamerasPage() {
                         <h4 className="font-semibold text-foreground flex items-center gap-2">
                           {cam.name}
                           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${cam.status === "active"
-                              ? "bg-green-500/10 border-green-500/20 text-green-400"
-                              : "bg-danger/10 border-danger/20 text-danger"
+                            ? "bg-green-500/10 border-green-500/20 text-green-400"
+                            : "bg-danger/10 border-danger/20 text-danger"
                             }`}>
                             {cam.status === "active" ? "Active" : "Offline / Error"}
                           </span>

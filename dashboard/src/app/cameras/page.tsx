@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Camera, Plus, Trash2, Edit, Loader2, AlertCircle, CheckCircle, X, RefreshCw, HelpCircle, Sliders, MapPin } from "lucide-react";
+import { Camera, Plus, Trash2, Edit, Loader2, AlertCircle, CheckCircle, X, RefreshCw, HelpCircle, Sliders, MapPin, Server } from "lucide-react";
 import DetectionSetupWizard, { DetectionConfig } from "@/components/DetectionSetupWizard";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -27,6 +27,13 @@ interface CameraFeed {
   camera_id: string;
   name: string;
   data: string;
+}
+
+interface DvrResult {
+  channel: number;
+  name: string;
+  status: "connected" | "failed" | "timeout";
+  id: string | null;
 }
 
 const ROI_CANVAS_WIDTH = 1280;
@@ -98,6 +105,18 @@ export default function CamerasPage() {
   // Add Camera Form
   const [name, setName] = useState("");
   const [source, setSource] = useState("");
+
+  // DVR Modal
+  const [showDvrModal, setShowDvrModal] = useState(false);
+  const [dvrBrand, setDvrBrand] = useState("hikvision");
+  const [dvrIp, setDvrIp] = useState("");
+  const [dvrPort, setDvrPort] = useState("554");
+  const [dvrUsername, setDvrUsername] = useState("");
+  const [dvrPassword, setDvrPassword] = useState("");
+  const [dvrNamePrefix, setDvrNamePrefix] = useState("");
+  const [dvrChannelCount, setDvrChannelCount] = useState(4);
+  const [dvrSubmitting, setDvrSubmitting] = useState(false);
+  const [dvrResults, setDvrResults] = useState<DvrResult[] | null>(null);
 
   // ROI Canvas Drawer Modal States
   const [selectedCam, setSelectedCam] = useState<CameraData | null>(null);
@@ -317,6 +336,52 @@ export default function CamerasPage() {
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       setSubmitting(false);
+    }
+  };
+
+  const handleAddDvr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dvrIp.trim() || !dvrNamePrefix.trim()) {
+      setMessage({ text: "Preencha o IP e o prefixo do nome.", type: "error" });
+      return;
+    }
+
+    setDvrSubmitting(true);
+    setDvrResults(null);
+    const channels = Array.from({ length: dvrChannelCount }, (_, i) => i + 1);
+
+    try {
+      const res = await fetch(`${apiBaseUrl}/cameras/dvr`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name_prefix: dvrNamePrefix,
+          ip: dvrIp,
+          port: parseInt(dvrPort) || 554,
+          username: dvrUsername,
+          password: dvrPassword,
+          channels,
+          brand: dvrBrand,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setDvrResults(data.results);
+        if (data.connected > 0) {
+          setMessage({ text: `${data.connected} câmera(s) do DVR conectada(s) com sucesso!`, type: "success" });
+          await fetchCameras();
+        } else {
+          setMessage({ text: "Nenhuma câmera conectou. Verifique IP, porta e credenciais.", type: "error" });
+        }
+      } else {
+        setMessage({ text: data.detail || "Erro ao conectar DVR.", type: "error" });
+      }
+    } catch {
+      setMessage({ text: "Erro de conexão. Verifique se o backend está ativo.", type: "error" });
+    } finally {
+      setDvrSubmitting(false);
     }
   };
 
@@ -559,6 +624,21 @@ export default function CamerasPage() {
                 {submitting ? "Connecting stream..." : "Add Camera Stream"}
               </button>
             </form>
+
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px bg-glass-border" />
+              <span className="text-xs text-foreground/35">ou</span>
+              <div className="flex-1 h-px bg-glass-border" />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => { setShowDvrModal(true); setDvrResults(null); }}
+              className="w-full flex items-center justify-center gap-2 bg-purple-500/15 border border-purple-500/30 text-purple-400 hover:bg-purple-500/25 py-2 rounded-lg font-medium transition-colors cursor-pointer text-sm"
+            >
+              <Server className="w-4 h-4" />
+              Conectar DVR / NVR
+            </button>
           </div>
         </div>
 
@@ -657,6 +737,173 @@ export default function CamerasPage() {
           }}
           initialConfig={detectionConfig ?? undefined}
         />
+      )}
+
+      {/* DVR Connection Modal */}
+      {showDvrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="glass-panel w-full max-w-lg border border-glass-border shadow-2xl">
+            <div className="glass-header px-6 py-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Server className="w-5 h-5 text-purple-400" />
+                  Conectar DVR / NVR
+                </h3>
+                <p className="text-xs text-foreground/60">Adicione múltiplas câmeras via IP do gravador</p>
+              </div>
+              <button
+                onClick={() => setShowDvrModal(false)}
+                className="p-1.5 hover:bg-white/10 rounded-lg text-foreground/70 hover:text-foreground transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddDvr} className="p-6 space-y-4">
+              {/* Brand */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground/80">Fabricante</label>
+                <select
+                  value={dvrBrand}
+                  onChange={e => setDvrBrand(e.target.value)}
+                  className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground"
+                >
+                  <option value="hikvision">Hikvision</option>
+                  <option value="dahua">Dahua</option>
+                  <option value="intelbras">Intelbras</option>
+                  <option value="generic">Genérico (RTSP padrão)</option>
+                </select>
+              </div>
+
+              {/* IP + Port */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2 space-y-2">
+                  <label className="text-sm font-medium text-foreground/80">IP do DVR</label>
+                  <input
+                    type="text"
+                    value={dvrIp}
+                    onChange={e => setDvrIp(e.target.value)}
+                    placeholder="192.168.1.100"
+                    className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground placeholder:text-foreground/30"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground/80">Porta</label>
+                  <input
+                    type="number"
+                    value={dvrPort}
+                    onChange={e => setDvrPort(e.target.value)}
+                    placeholder="554"
+                    className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground placeholder:text-foreground/30"
+                  />
+                </div>
+              </div>
+
+              {/* Credentials */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground/80">Usuário</label>
+                  <input
+                    type="text"
+                    value={dvrUsername}
+                    onChange={e => setDvrUsername(e.target.value)}
+                    placeholder="admin"
+                    className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground placeholder:text-foreground/30"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground/80">Senha</label>
+                  <input
+                    type="password"
+                    value={dvrPassword}
+                    onChange={e => setDvrPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground placeholder:text-foreground/30"
+                  />
+                </div>
+              </div>
+
+              {/* Name prefix + channel count */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground/80">Prefixo do nome</label>
+                  <input
+                    type="text"
+                    value={dvrNamePrefix}
+                    onChange={e => setDvrNamePrefix(e.target.value)}
+                    placeholder="DVR Loja"
+                    className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground placeholder:text-foreground/30"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground/80">Número de canais</label>
+                  <select
+                    value={dvrChannelCount}
+                    onChange={e => setDvrChannelCount(Number(e.target.value))}
+                    className="w-full bg-black/40 border border-glass-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand text-foreground"
+                  >
+                    {[1, 2, 4, 8, 16, 32].map(n => (
+                      <option key={n} value={n}>{n} canal{n > 1 ? "is" : ""}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* URL preview */}
+              <div className="p-3 rounded-lg bg-black/30 border border-glass-border text-[11px] font-mono text-foreground/50 break-all">
+                {dvrIp ? (
+                  <>
+                    <span className="text-foreground/30">Exemplo canal 1: </span>
+                    {dvrBrand === "hikvision" && `rtsp://${dvrUsername ? dvrUsername + ":***@" : ""}${dvrIp}:${dvrPort || 554}/Streaming/Channels/101`}
+                    {(dvrBrand === "dahua" || dvrBrand === "intelbras") && `rtsp://${dvrUsername ? dvrUsername + ":***@" : ""}${dvrIp}:${dvrPort || 554}/cam/realmonitor?channel=1&subtype=0`}
+                    {dvrBrand === "generic" && `rtsp://${dvrUsername ? dvrUsername + ":***@" : ""}${dvrIp}:${dvrPort || 554}/stream1`}
+                  </>
+                ) : (
+                  <span className="text-foreground/25">Preencha o IP para visualizar a URL gerada</span>
+                )}
+              </div>
+
+              {/* Results */}
+              {dvrResults && (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  <p className="text-xs font-semibold text-foreground/60 uppercase tracking-wider">Resultado por canal</p>
+                  {dvrResults.map(r => (
+                    <div key={r.channel} className={`flex items-center justify-between px-3 py-2 rounded-lg border text-xs ${
+                      r.status === "connected"
+                        ? "bg-green-500/10 border-green-500/25 text-green-400"
+                        : "bg-danger/10 border-danger/25 text-danger"
+                    }`}>
+                      <span className="font-medium">{r.name}</span>
+                      <span className="font-bold uppercase text-[10px]">
+                        {r.status === "connected" ? "✓ Conectado" : r.status === "timeout" ? "Timeout" : "Falhou"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDvrModal(false)}
+                  className="flex-1 px-4 py-2 border border-glass-border hover:bg-glass rounded-lg text-sm font-semibold transition-colors cursor-pointer text-foreground/80"
+                >
+                  {dvrResults ? "Fechar" : "Cancelar"}
+                </button>
+                <button
+                  type="submit"
+                  disabled={dvrSubmitting}
+                  className="flex-1 flex items-center justify-center gap-2 bg-purple-500/80 hover:bg-purple-500/90 disabled:opacity-50 text-white py-2 rounded-lg font-semibold transition-colors cursor-pointer text-sm"
+                >
+                  {dvrSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Server className="w-4 h-4" />}
+                  {dvrSubmitting ? `Conectando canais...` : "Conectar Câmeras"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* ROI Drawing Canvas Modal */}

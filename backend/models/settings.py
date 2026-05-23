@@ -28,3 +28,13 @@ class RoiZone(BaseModel):
 class CameraInput(BaseModel):
     name: str
     source: str
+
+
+class DVRInput(BaseModel):
+    name_prefix: str
+    ip: str
+    port: int = 554
+    username: str = ""
+    password: str = ""
+    channels: list[int]
+    brand: Literal["hikvision", "dahua", "intelbras", "generic"] = "generic"

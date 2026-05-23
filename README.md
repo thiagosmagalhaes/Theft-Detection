@@ -77,6 +77,16 @@ cd Theft-Detection
 pip install -r requirements.txt
 ```
 
+Optional (only if you want RF-DETR as object detector):
+```bash
+pip install torch transformers
+```
+
+Copy environment file:
+```bash
+copy .env.example .env
+```
+
 *Note: If you have a custom pre-trained hırsızlık model (`shoplifting.pt`), place it in the root directory. The system will automatically detect it and upgrade from default pose algorithms to the specialized neural net.*
 
 ### 2. Dashboard UI Configuration
@@ -103,6 +113,22 @@ start_system.bat
 python backend.py
 ```
 *(The server will boot on `http://localhost:8000` and stream WebSockets on `ws://localhost:8000/ws`)*
+
+**Detector backend selection (YOLO or RF-DETR):**
+Edit `.env` and set:
+```env
+# Default
+OBJECT_DETECTOR_BACKEND=yolo
+
+# RF-DETR via Hugging Face model
+OBJECT_DETECTOR_BACKEND=rf-detr
+RF_DETR_MODEL_ID=Roboflow/rf-detr-base
+
+# YOLO file names (also read from .env)
+YOLO_POSE_MODEL=yolo26x-pose.pt
+YOLO_OBJ_MODEL=yolo26x.pt
+YOLO_SPECIALIZED_MODEL=shoplifting.pt
+```
 
 **2. Start the Frontend Dashboard:**
 ```bash

@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 from backend.detection import TheftBehaviorTracker, ZONE_LABELS
+from backend.config import YOLO_POSE_MODEL, YOLO_OBJ_MODEL
 
 # Configuração
 VIDEO_SOURCE = 0  # 0 = webcam, ou caminho para arquivo de vídeo
@@ -99,8 +100,8 @@ def main():
     
     # Carregar modelos
     try:
-        pose_model = YOLO("yolov8n-pose.pt")
-        obj_model = YOLO("yolov8n.pt")
+        pose_model = YOLO(YOLO_POSE_MODEL)
+        obj_model = YOLO(YOLO_OBJ_MODEL)
         print("✓ Modelos carregados com sucesso!")
     except Exception as e:
         print(f"✗ Erro ao carregar modelos: {e}")

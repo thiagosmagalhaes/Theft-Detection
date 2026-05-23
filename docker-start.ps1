@@ -22,7 +22,63 @@ try {
 
 # Check if required files exist
 Write-Host "Checking required files..." -ForegroundColor Yellow
-$requiredFiles = @("yolov8n-pose.pt", "yolov8n.pt", "cameras.json", "settings.json")
+$poseModel = "yolo26x-pose.pt"
+$objModel = "yolo26x.pt"
+
+function Ensure-ModelFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelFile,
+        [string]$ModelUrl
+    )
+
+    if (Test-Path $ModelFile) {
+        Write-Host "  OK: $ModelFile" -ForegroundColor Green
+        return $true
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ModelUrl)) {
+        return $false
+    }
+
+    Write-Host "  Downloading $ModelFile..." -ForegroundColor Yellow
+    try {
+        Invoke-WebRequest -Uri $ModelUrl -OutFile $ModelFile
+        Write-Host "  OK: Downloaded $ModelFile" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "  Failed to download $ModelFile from $ModelUrl" -ForegroundColor Red
+        return $false
+    }
+}
+
+if (Test-Path ".env") {
+    $envFile = Get-Content ".env"
+
+    $poseLine = $envFile | Where-Object { $_ -match '^\s*YOLO_POSE_MODEL\s*=' } | Select-Object -First 1
+    if ($poseLine) {
+        $poseModel = ($poseLine -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    }
+
+    $objLine = $envFile | Where-Object { $_ -match '^\s*YOLO_OBJ_MODEL\s*=' } | Select-Object -First 1
+    if ($objLine) {
+        $objModel = ($objLine -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    }
+}
+
+$poseUrl = if ($poseModel -eq "yolo26x-pose.pt") { "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26x-pose.pt" } else { "" }
+$objUrl = if ($objModel -eq "yolo26x.pt") { "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26x.pt" } else { "" }
+
+if (-not (Ensure-ModelFile -ModelFile $poseModel -ModelUrl $poseUrl)) {
+    Write-Host "Required model not found and automatic download is unavailable: $poseModel" -ForegroundColor Red
+    exit 1
+}
+
+if (-not (Ensure-ModelFile -ModelFile $objModel -ModelUrl $objUrl)) {
+    Write-Host "Required model not found and automatic download is unavailable: $objModel" -ForegroundColor Red
+    exit 1
+}
+
+$requiredFiles = @("cameras.json", "settings.json")
 foreach ($file in $requiredFiles) {
     if (-not (Test-Path $file)) {
         Write-Host "Required file not found: $file" -ForegroundColor Red

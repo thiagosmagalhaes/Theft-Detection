@@ -1,11 +1,12 @@
 import cv2
 from ultralytics import YOLO
 import numpy as np
+from backend.config import YOLO_OBJ_MODEL
 
 try:
     print("OpenCV imported.")
     print("Loading YOLO model...")
-    model = YOLO('yolov8n.pt')
+    model = YOLO(YOLO_OBJ_MODEL)
     print("Model loaded.")
     
     # Create dummy image

@@ -6,7 +6,7 @@ Este guia explica como executar o sistema de detecção de furtos usando Docker 
 
 - Docker instalado (versão 20.10 ou superior)
 - Docker Compose instalado (versão 1.29 ou superior)
-- Modelos YOLO (`yolov8n-pose.pt` e `yolov8n.pt`) no diretório raiz
+- Modelos YOLO configurados no `.env` (`YOLO_POSE_MODEL` e `YOLO_OBJ_MODEL`); os padrões `yolo26x.pt` e `yolo26x-pose.pt` são baixados automaticamente se não existirem
 - Arquivos de configuração (`cameras.json` e `settings.json`)
 
 ## 🚀 Quick Start
@@ -194,7 +194,9 @@ chown -R $(id -u):$(id -g) alerts faces
 
 ### Modelos YOLO não encontrados
 
-Certifique-se de que os arquivos `yolov8n-pose.pt` e `yolov8n.pt` estão no diretório raiz:
+Os scripts `docker-start.ps1` e `docker-start.sh` baixam automaticamente `yolo26x.pt` e `yolo26x-pose.pt` se estiverem ausentes e se esses nomes estiverem configurados no `.env`.
+
+Se você usar nomes diferentes no `.env`, certifique-se de que os arquivos correspondentes estejam no diretório raiz:
 
 ```bash
 ls -la *.pt

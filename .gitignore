@@ -16,6 +16,9 @@ alerts/
 faces/
 cameras.json
 
+# Model weights
+*.pt
+
 # OS
 .DS_Store
 Thumbs.db

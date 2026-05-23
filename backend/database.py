@@ -21,6 +21,29 @@ def init_db():
                       image_path TEXT, confidence REAL,
                       FOREIGN KEY (person_id) REFERENCES faces(id))''')
         
+        # Zone object events table for tracking objects in/out of zones
+        c.execute('''CREATE TABLE IF NOT EXISTS zone_object_events (
+            id TEXT PRIMARY KEY,
+            camera_id TEXT NOT NULL,
+            zone_name TEXT NOT NULL,
+            object_class TEXT NOT NULL,
+            object_id INTEGER,
+            event_type TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            duration_seconds REAL,
+            confidence REAL,
+            bbox_x1 INTEGER,
+            bbox_y1 INTEGER,
+            bbox_x2 INTEGER,
+            bbox_y2 INTEGER,
+            image_path TEXT,
+            video_path TEXT
+        )''')
+        
+        # Create indexes for zone events
+        c.execute('CREATE INDEX IF NOT EXISTS idx_zone_events_camera ON zone_object_events(camera_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_zone_events_timestamp ON zone_object_events(timestamp)')
+        
         # Check if video_path column exists, add it if not (for existing databases)
         try:
             c.execute("SELECT video_path FROM alerts LIMIT 1")
@@ -220,3 +243,137 @@ def get_all_persons_with_stats():
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def insert_zone_event(camera_id, zone_name, object_class, object_id, event_type, bbox, confidence, image_path=None, video_path=None):
+    """
+    Insert a zone object event into database
+    
+    Args:
+        camera_id: Camera identifier
+        zone_name: Name of the zone (e.g., "Entrada / Balcão")
+        object_class: Object class name (e.g., "cell phone", "backpack")
+        object_id: YOLO tracking ID (or None)
+        event_type: Type of event ("entered", "exited", "removed")
+        bbox: Bounding box as (x1, y1, x2, y2) tuple
+        confidence: Detection confidence (0.0-1.0)
+        image_path: Optional path to event image
+        video_path: Optional path to event video
+    
+    Returns:
+        Event ID (UUID string)
+    """
+    import uuid
+    from datetime import datetime
+    
+    event_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        
+        x1, y1, x2, y2 = bbox
+        
+        c.execute("""INSERT INTO zone_object_events 
+                     (id, camera_id, zone_name, object_class, object_id, event_type, timestamp, 
+                      confidence, bbox_x1, bbox_y1, bbox_x2, bbox_y2, image_path, video_path)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  (event_id, camera_id, zone_name, object_class, object_id, event_type, timestamp,
+                   confidence, int(x1), int(y1), int(x2), int(y2), image_path, video_path))
+        
+        conn.commit()
+        conn.close()
+        return event_id
+    except Exception as e:
+        print(f"Error inserting zone event: {e}")
+        return None
+
+
+def get_zone_events(camera_id=None, zone_name=None, event_type=None, object_class=None, limit=100):
+    """
+    Get zone object events from database with optional filters
+    
+    Args:
+        camera_id: Filter by camera ID (optional)
+        zone_name: Filter by zone name (optional)
+        event_type: Filter by event type ("entered", "exited", "removed") (optional)
+        object_class: Filter by object class (optional)
+        limit: Maximum number of results
+    
+    Returns:
+        List of event dictionaries
+    """
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    
+    query = "SELECT * FROM zone_object_events WHERE 1=1"
+    params = []
+    
+    if camera_id is not None:
+        query += " AND camera_id = ?"
+        params.append(camera_id)
+    
+    if zone_name is not None:
+        query += " AND zone_name = ?"
+        params.append(zone_name)
+    
+    if event_type is not None:
+        query += " AND event_type = ?"
+        params.append(event_type)
+    
+    if object_class is not None:
+        query += " AND object_class = ?"
+        params.append(object_class)
+    
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
+    
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_zone_stats(camera_id=None, zone_name=None):
+    """
+    Get statistics for zone events
+    
+    Args:
+        camera_id: Filter by camera ID (optional)
+        zone_name: Filter by zone name (optional)
+    
+    Returns:
+        Dictionary with zone statistics
+    """
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    
+    query = "SELECT event_type, object_class, COUNT(*) as count FROM zone_object_events WHERE 1=1"
+    params = []
+    
+    if camera_id is not None:
+        query += " AND camera_id = ?"
+        params.append(camera_id)
+    
+    if zone_name is not None:
+        query += " AND zone_name = ?"
+        params.append(zone_name)
+    
+    query += " GROUP BY event_type, object_class"
+    
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    
+    stats = {}
+    for row in rows:
+        event_type = row['event_type']
+        if event_type not in stats:
+            stats[event_type] = {}
+        stats[event_type][row['object_class']] = row['count']
+    
+    return stats
+

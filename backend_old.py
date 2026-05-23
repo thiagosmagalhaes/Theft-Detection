@@ -24,6 +24,11 @@ from pydantic import BaseModel
 import sqlite3
 import pickle
 
+# YOLO model files (configurable via .env)
+YOLO_POSE_MODEL = os.getenv("YOLO_POSE_MODEL", "yolo26x-pose.pt").strip()
+YOLO_OBJ_MODEL = os.getenv("YOLO_OBJ_MODEL", "yolo26x.pt").strip()
+YOLO_SPECIALIZED_MODEL = os.getenv("YOLO_SPECIALIZED_MODEL", "shoplifting.pt").strip()
+
 # Fix for Windows long path issue with face_recognition_models
 try:
     import ctypes
@@ -848,18 +853,18 @@ def video_loop():
     
     try:
         print("Loading Pose Model...")
-        model_pose = YOLO('yolov8n-pose.pt') 
+        model_pose = YOLO(YOLO_POSE_MODEL)
         
         print("Loading Theft Detection Model...")
         try:
             # Try to load specialized model first
-            model_obj = YOLO('shoplifting.pt')
+            model_obj = YOLO(YOLO_SPECIALIZED_MODEL)
             model_is_specialized = True
-            print("Özel Hırsızlık Modeli Yüklendi! (shoplifting.pt)")
+            print(f"Özel Hırsızlık Modeli Yüklendi! ({YOLO_SPECIALIZED_MODEL})")
         except:
-            print("Özel model bulunamadı, standart nesne takibine (yolov8n.pt) geçiliyor...")
+            print(f"Özel model bulunamadı, standart nesne takibine ({YOLO_OBJ_MODEL}) geçiliyor...")
             try:
-                model_obj = YOLO('yolov8n.pt')
+                model_obj = YOLO(YOLO_OBJ_MODEL)
             except Exception as e:
                 print(f"Standart Model de yüklenemedi: {e}")
                 model_obj = None

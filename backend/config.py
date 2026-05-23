@@ -13,20 +13,36 @@ SETTINGS_FILE = "settings.json"
 DB_NAME = "theft_detection.db"
 CAMERAS_FILE = "cameras.json"
 
+# YOLO Tracking Configuration (Ultralytics Solutions best practices)
+TRACKER_TYPE = os.getenv("TRACKER_TYPE", "botsort.yaml").strip()  # or "bytetrack.yaml"
+TRACKER_CONF = float(os.getenv("TRACKER_CONF", "0.5"))  # Confidence threshold
+TRACKER_IOU = float(os.getenv("TRACKER_IOU", "0.5"))  # IoU threshold for NMS
+
 # Detection thresholds
 LOITERING_THRESHOLD = 5.0
 ALERT_COOLDOWN = 3.0
 AUTO_REGISTER_DELAY = 3.0
 MIN_BOX_SIZE = 80
 MIN_VISIBLE_KEYPOINTS = 5
+OBJECT_DETECTION_INTERVAL = 3
+OBJECT_DETECTION_CONFIDENCE = 0.25
+OBJECT_DETECTOR_BACKEND = os.getenv("OBJECT_DETECTOR_BACKEND", "yolo").strip().lower()
+RF_DETR_MODEL_ID = os.getenv("RF_DETR_MODEL_ID", "Roboflow/rf-detr-base")
 
-# YOLO model files
-YOLO_POSE_MODEL = 'yolov8n-pose.pt'
-YOLO_OBJ_MODEL = 'yolov8n.pt'
-YOLO_SPECIALIZED_MODEL = 'shoplifting.pt'
+# YOLO model files (configurable via .env)
+YOLO_POSE_MODEL = os.getenv("YOLO_POSE_MODEL", "yolo26x-pose.pt").strip()
+YOLO_OBJ_MODEL = os.getenv("YOLO_OBJ_MODEL", "yolo26x.pt").strip()
+YOLO_SPECIALIZED_MODEL = os.getenv("YOLO_SPECIALIZED_MODEL", "shoplifting.pt").strip()
 
-# Target classes for stealable items (COCO dataset)
-TARGET_CLASSES = [24, 25, 26, 28, 39, 40, 41, 42, 43, 67, 73, 74, 75, 76, 77, 78, 79]
+# Target classes for likely retail items/bags (COCO dataset)
+TARGET_CLASSES = [
+    24, 25, 26, 28,             # backpack, umbrella, handbag, suitcase
+    39, 40, 41, 42, 43, 44, 45, # bottle, wine glass, cup, fork, knife, spoon, bowl
+    46, 47, 48, 49, 50, 51, 52, 53, 54, 55, # food items
+    56, 57, 58, 59, 60,         # chair, couch, potted plant, bed, dining table
+    62, 63, 64, 66, 67,         # tv, laptop, mouse, keyboard, cell phone
+    73, 74, 75, 76, 77, 78, 79  # book, clock, vase, scissors, teddy bear, hair drier, toothbrush
+]
 
 # Optional dependencies
 try:

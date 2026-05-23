@@ -68,7 +68,9 @@ async def websocket_endpoint(websocket: WebSocket):
             if message_to_send:
                 await websocket.send_text(message_to_send)
 
-            await asyncio.sleep(0.04) 
+            # Throttle WebSocket updates to 10 FPS (reduces bandwidth and browser load)
+            # Detection still runs at full speed; only dashboard updates are throttled
+            await asyncio.sleep(0.1) 
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:

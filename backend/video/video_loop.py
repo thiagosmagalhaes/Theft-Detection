@@ -52,7 +52,7 @@ def get_camera_buffer(cam_data):
 
 
 def normalize_roi_points(points):
-    """Convert ROI points to OpenCV-friendly int tuples."""
+    """Parse ROI points to numeric tuples (float precision)."""
     normalized = []
     if not isinstance(points, list):
         return normalized
@@ -72,11 +72,40 @@ def normalize_roi_points(points):
             continue
 
         try:
-            normalized.append((int(float(x)), int(float(y))))
+            normalized.append((float(x), float(y)))
         except (TypeError, ValueError):
             continue
 
     return normalized
+
+
+def resolve_roi_points_for_frame(points, frame_shape):
+    """Convert ROI points to frame pixel coordinates.
+
+    Supports both legacy absolute pixel points and normalized points (0..1).
+    """
+    parsed = normalize_roi_points(points)
+    if not parsed:
+        return []
+
+    frame_h, frame_w = frame_shape[:2]
+    is_normalized = all(0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 for x, y in parsed)
+
+    if is_normalized:
+        return [
+            (int(round(x * (frame_w - 1))), int(round(y * (frame_h - 1))))
+            for x, y in parsed
+        ]
+
+    return [(int(round(x)), int(round(y))) for x, y in parsed]
+
+
+def is_valid_polygon(points, min_area=100.0):
+    """Validate polygon shape to avoid degenerate ROI (e.g., all points at 0,0)."""
+    if len(points) < 3:
+        return False
+    area = cv2.contourArea(np.array(points, dtype=np.int32))
+    return area >= min_area
 
 
 def video_loop():
@@ -131,25 +160,8 @@ def video_loop():
                 name = cam_data["name"]
                 current_time = time.time()
                 
-                # Fetch specific camera ROI (legacy single-zone)
-                cam_roi = normalize_roi_points(cam_data.get("roi_points", []))
                 # Multi-zone ROIs (new): list of dicts {zone_type, points}
                 raw_zones = cam_data.get("roi_zones", [])
-                merchandise_rois = [
-                    normalize_roi_points(z["points"])
-                    for z in raw_zones if z.get("zone_type") == "merchandise"
-                ]
-                forbidden_rois = [
-                    normalize_roi_points(z["points"])
-                    for z in raw_zones if z.get("zone_type") == "forbidden"
-                ]
-                entry_rois = [
-                    normalize_roi_points(z["points"])
-                    for z in raw_zones if z.get("zone_type") == "entry"
-                ]
-                # Fallback: treat legacy single roi_points as merchandise zone
-                if not merchandise_rois and cam_roi:
-                    merchandise_rois = [cam_roi]
                 
                 if cap.isOpened():
                     ret, frame = cap.read()
@@ -157,6 +169,27 @@ def video_loop():
                         frame = no_signal_frame.copy()
                 else:
                     frame = no_signal_frame.copy()
+
+                # Fetch camera ROI points and adapt to current frame resolution
+                cam_roi = resolve_roi_points_for_frame(cam_data.get("roi_points", []), frame.shape)
+                merchandise_rois = [
+                    resolve_roi_points_for_frame(z.get("points", []), frame.shape)
+                    for z in raw_zones if z.get("zone_type") == "merchandise"
+                ]
+                forbidden_rois = [
+                    resolve_roi_points_for_frame(z.get("points", []), frame.shape)
+                    for z in raw_zones if z.get("zone_type") == "forbidden"
+                ]
+                entry_rois = [
+                    resolve_roi_points_for_frame(z.get("points", []), frame.shape)
+                    for z in raw_zones if z.get("zone_type") == "entry"
+                ]
+                merchandise_rois = [z for z in merchandise_rois if is_valid_polygon(z)]
+                forbidden_rois = [z for z in forbidden_rois if is_valid_polygon(z)]
+                entry_rois = [z for z in entry_rois if is_valid_polygon(z)]
+                # Fallback: treat legacy single roi_points as merchandise zone
+                if not merchandise_rois and is_valid_polygon(cam_roi):
+                    merchandise_rois = [cam_roi]
 
                 if cap.isOpened() and 'ret' in locals() and ret:
                     # 1. POSE INFERENCE (Every Frame for tracking)
@@ -343,8 +376,8 @@ def video_loop():
                         "entry":       (80, 200, 80),   # green
                     }
                     for z in raw_zones:
-                        pts = normalize_roi_points(z.get("points", []))
-                        if len(pts) >= 3:
+                        pts = resolve_roi_points_for_frame(z.get("points", []), frame.shape)
+                        if is_valid_polygon(pts):
                             colour = zone_colours.get(z.get("zone_type", "merchandise"), (0, 200, 255))
                             cv2.polylines(frame, [np.array(pts, dtype=np.int32)], isClosed=True, color=colour, thickness=2)
                             # Label in top-left corner of zone bounding box
@@ -352,11 +385,15 @@ def video_loop():
                             cv2.putText(frame, z.get("name", "Zona"), (min(xs), min(ys) - 6),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1)
                     # Legacy single roi_points (if no zones defined)
-                    if not raw_zones and len(cam_roi) > 0:
+                    if (not raw_zones or not any(is_valid_polygon(resolve_roi_points_for_frame(z.get("points", []), frame.shape)) for z in raw_zones)) and is_valid_polygon(cam_roi):
                         cv2.polylines(frame, [np.array(cam_roi, dtype=np.int32)], isClosed=True, color=(0, 255, 255), thickness=2)
 
-                # Encode frame
-                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                # Resize frame for WebSocket (reduce bandwidth)
+                h, w = frame.shape[:2]
+                display_frame = cv2.resize(frame, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+                
+                # Encode frame with lower quality (reduce base64 size)
+                _, buffer = cv2.imencode('.jpg', display_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 45])
                 jpg_as_text = base64.b64encode(buffer).decode('utf-8')
                 
                 frames_payload.append({

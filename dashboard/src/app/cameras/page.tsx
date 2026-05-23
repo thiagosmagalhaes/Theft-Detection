@@ -29,6 +29,66 @@ interface CameraFeed {
   data: string;
 }
 
+const ROI_CANVAS_WIDTH = 1280;
+const ROI_CANVAS_HEIGHT = 720;
+
+const toCanvasPoints = (points: number[][], canvasWidth: number, canvasHeight: number): number[][] => {
+  if (!Array.isArray(points)) return [];
+
+  return points
+    .filter((p) => Array.isArray(p) && p.length >= 2)
+    .map((p) => {
+      const x = Number(p[0]);
+      const y = Number(p[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+      // Normalized points from backend (0..1)
+      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+        return [Math.round(x * canvasWidth), Math.round(y * canvasHeight)];
+      }
+
+      // Legacy absolute pixel points
+      return [Math.round(x), Math.round(y)];
+    })
+    .filter((p): p is number[] => p !== null);
+};
+
+const toNormalizedPoints = (points: number[][], canvasWidth: number, canvasHeight: number): number[][] => {
+  if (!Array.isArray(points) || canvasWidth <= 0 || canvasHeight <= 0) return [];
+
+  return points
+    .filter((p) => Array.isArray(p) && p.length >= 2)
+    .map((p) => {
+      const x = Number(p[0]);
+      const y = Number(p[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+      const nx = Math.max(0, Math.min(1, x / canvasWidth));
+      const ny = Math.max(0, Math.min(1, y / canvasHeight));
+      return [Number(nx.toFixed(6)), Number(ny.toFixed(6))];
+    })
+    .filter((p): p is number[] => p !== null);
+};
+
+const ensureNormalizedPoints = (points: number[][]): number[][] => {
+  if (!Array.isArray(points)) return [];
+  const valid = points.filter((p) => Array.isArray(p) && p.length >= 2);
+  if (valid.length === 0) return [];
+
+  const alreadyNormalized = valid.every((p) => {
+    const x = Number(p[0]);
+    const y = Number(p[1]);
+    return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+  });
+
+  if (alreadyNormalized) {
+    return valid.map((p) => [Number(Number(p[0]).toFixed(6)), Number(Number(p[1]).toFixed(6))]);
+  }
+
+  // Legacy absolute coordinates fallback (historically edited on 1280x720 canvas).
+  return toNormalizedPoints(valid, ROI_CANVAS_WIDTH, ROI_CANVAS_HEIGHT);
+};
+
 export default function CamerasPage() {
   const [cameras, setCameras] = useState<CameraData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,8 +106,8 @@ export default function CamerasPage() {
   const [activeZoneIdx, setActiveZoneIdx] = useState<number>(0); // which zone is being drawn
   const [activeFrameBase64, setActiveFrameBase64] = useState<string | null>(null);
   const [frameResolution, setFrameResolution] = useState<{ width: number; height: number }>({
-    width: 1280,
-    height: 720,
+    width: ROI_CANVAS_WIDTH,
+    height: ROI_CANVAS_HEIGHT,
   });
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -168,11 +228,13 @@ export default function CamerasPage() {
         if (zone.points.length === 0) return;
         const colours = ZONE_COLOURS[zone.zone_type];
         const isActive = zIdx === activeZoneIdx;
+        const canvasPoints = toCanvasPoints(zone.points, canvas.width, canvas.height);
+        if (canvasPoints.length === 0) return;
 
         ctx.beginPath();
-        ctx.moveTo(zone.points[0][0], zone.points[0][1]);
-        for (let i = 1; i < zone.points.length; i++) {
-          ctx.lineTo(zone.points[i][0], zone.points[i][1]);
+        ctx.moveTo(canvasPoints[0][0], canvasPoints[0][1]);
+        for (let i = 1; i < canvasPoints.length; i++) {
+          ctx.lineTo(canvasPoints[i][0], canvasPoints[i][1]);
         }
         ctx.closePath();
         ctx.fillStyle = colours.fill;
@@ -184,8 +246,8 @@ export default function CamerasPage() {
         ctx.setLineDash([]);
 
         // Zone name label
-        const minX = Math.min(...zone.points.map((p) => p[0]));
-        const minY = Math.min(...zone.points.map((p) => p[1]));
+        const minX = Math.min(...canvasPoints.map((p) => p[0]));
+        const minY = Math.min(...canvasPoints.map((p) => p[1]));
         ctx.fillStyle = colours.stroke;
         ctx.font = "bold 13px sans-serif";
         ctx.textAlign = "left";
@@ -193,7 +255,7 @@ export default function CamerasPage() {
 
         // Draw anchor dots for the active zone only (so it's clear which one you're editing)
         if (isActive) {
-          zone.points.forEach((pt, idx) => {
+          canvasPoints.forEach((pt, idx) => {
             ctx.beginPath();
             ctx.arc(pt[0], pt[1], 6, 0, 2 * Math.PI);
             ctx.fillStyle = "#ffffff";
@@ -285,15 +347,17 @@ export default function CamerasPage() {
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
-    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
-    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+    const px = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const py = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const x = Math.max(0, Math.min(1, px / canvas.width));
+    const y = Math.max(0, Math.min(1, py / canvas.height));
 
     setRoiZones((prev) => {
       const updated = [...prev];
       if (updated.length === 0) return prev; // no zone selected yet
       updated[activeZoneIdx] = {
         ...updated[activeZoneIdx],
-        points: [...updated[activeZoneIdx].points, [x, y]],
+        points: [...updated[activeZoneIdx].points, [Number(x.toFixed(6)), Number(y.toFixed(6))]],
       };
       return updated;
     });
@@ -333,15 +397,33 @@ export default function CamerasPage() {
 
   const openRoiModal = (cam: CameraData) => {
     setSelectedCam(cam);
+    const canvasWidth = frameResolution.width || ROI_CANVAS_WIDTH;
+    const canvasHeight = frameResolution.height || ROI_CANVAS_HEIGHT;
+
+    const mappedZones = (cam.roi_zones || []).map((zone) => ({
+      ...zone,
+      points: ensureNormalizedPoints(zone.points),
+    }));
+
+    const hasUsableZones = mappedZones.some((zone) => {
+      if (zone.points.length < 3) return false;
+      return zone.points.some((p) => p[0] > 0 || p[1] > 0);
+    });
+
     // Load existing zones; fall back to legacy roi_points as a merchandise zone
-    const existingZones: RoiZone[] = cam.roi_zones && cam.roi_zones.length > 0
-      ? cam.roi_zones
+    const existingZones: RoiZone[] = hasUsableZones
+      ? mappedZones
       : cam.roi_points && cam.roi_points.length >= 3
-        ? [{ name: "Área de Mercadoria", zone_type: "merchandise", points: cam.roi_points }]
+        ? [{
+          name: "Área de Mercadoria",
+          zone_type: "merchandise",
+          points: ensureNormalizedPoints(cam.roi_points),
+        }]
         : [];
+
     setRoiZones(existingZones);
     setActiveZoneIdx(0);
-    setFrameResolution({ width: 1280, height: 720 });
+    setFrameResolution({ width: ROI_CANVAS_WIDTH, height: ROI_CANVAS_HEIGHT });
   };
 
   const handleSaveRoi = async () => {
@@ -352,11 +434,17 @@ export default function CamerasPage() {
       alert("Desenhe pelo menos uma zona com 3 ou mais pontos antes de salvar.");
       return;
     }
+
+    const payloadZones = validZones.map((zone) => ({
+      ...zone,
+      points: ensureNormalizedPoints(zone.points),
+    }));
+
     try {
       const res = await fetch(`${apiBaseUrl}/cameras/${selectedCam.id}/roi-zones`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ zones: validZones }),
+        body: JSON.stringify({ zones: payloadZones }),
       });
       const data = await res.json();
 

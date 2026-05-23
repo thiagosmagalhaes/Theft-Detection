@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 def _normalize_roi_points(raw_points):
-    """Normalize ROI points to [[x, y], ...] with integer values."""
+    """Normalize ROI points to [[x, y], ...] preserving float precision."""
     normalized = []
     if not isinstance(raw_points, list):
         return normalized
@@ -28,7 +28,7 @@ def _normalize_roi_points(raw_points):
             continue
 
         try:
-            normalized.append([int(float(x)), int(float(y))])
+            normalized.append([round(float(x), 6), round(float(y), 6)])
         except (TypeError, ValueError):
             continue
 

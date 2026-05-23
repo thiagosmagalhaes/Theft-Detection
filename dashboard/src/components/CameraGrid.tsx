@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, memo } from "react";
 import { Camera, Maximize2, AlertTriangle, WifiOff } from "lucide-react";
 
 interface CameraFeed {
@@ -22,6 +22,61 @@ interface WsPayload {
   alert: AlertData | null;
   audio: string | null;
 }
+
+// Componente de câmera individual memoizado para evitar re-renders desnecessários
+const CameraFeedDisplay = memo(({ cam, isAlerting, alertMessage }: { 
+  cam: CameraFeed; 
+  isAlerting: boolean; 
+  alertMessage: string;
+}) => {
+  // Memoize a URL da imagem para evitar recriar a string em cada render
+  const imageSrc = useMemo(() => `data:image/jpeg;base64,${cam.data}`, [cam.data]);
+
+  return (
+    <div 
+      className={`glass-panel overflow-hidden relative group transition-all duration-300 ${
+        isAlerting ? "alert-pulse ring-2 ring-danger" : ""
+      }`}
+    >
+      <div className="absolute top-0 left-0 right-0 glass-header p-2 flex justify-between items-center z-10">
+        <div className="flex items-center gap-2">
+          <Camera className={`w-4 h-4 ${isAlerting ? "text-danger" : "text-brand"}`} />
+          <span className="text-sm font-semibold">{cam.name}</span>
+        </div>
+        <div className="flex gap-2">
+          {isAlerting && (
+            <span className="flex items-center gap-1 text-xs text-danger font-bold animate-pulse bg-danger/20 px-2 rounded">
+              <AlertTriangle className="w-3 h-3" />
+              {alertMessage}
+            </span>
+          )}
+          <button className="p-1 hover:bg-white/10 rounded transition-colors">
+            <Maximize2 className="w-4 h-4 text-white/70" />
+          </button>
+        </div>
+      </div>
+      
+      <div className="aspect-video bg-black/40 relative flex items-center justify-center overflow-hidden">
+        <img 
+          src={imageSrc}
+          alt={cam.name}
+          className="w-full h-full object-contain"
+          loading="lazy"
+        />
+        {isAlerting && (
+          <div className="absolute inset-0 border-4 border-danger/50 z-20 pointer-events-none"></div>
+        )}
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Só re-renderiza se os dados da câmera mudaram OU o estado de alerta mudou
+  return (
+    prevProps.cam.data === nextProps.cam.data &&
+    prevProps.isAlerting === nextProps.isAlerting &&
+    (prevProps.isAlerting ? prevProps.alertMessage === nextProps.alertMessage : true)
+  );
+});
 
 export default function CameraGrid() {
   const [cameras, setCameras] = useState<CameraFeed[]>([]);
@@ -152,46 +207,14 @@ export default function CameraGrid() {
             No active cameras. Please add a camera from the backend.
           </div>
         ) : (
-          cameras.map((cam) => {
-            const isAlerting = alertCam === cam.camera_id;
-            return (
-              <div 
-                key={cam.camera_id} 
-                className={`glass-panel overflow-hidden relative group transition-all duration-300 ${
-                  isAlerting ? "alert-pulse ring-2 ring-danger" : ""
-                }`}
-              >
-                <div className="absolute top-0 left-0 right-0 glass-header p-2 flex justify-between items-center z-10">
-                  <div className="flex items-center gap-2">
-                    <Camera className={`w-4 h-4 ${isAlerting ? "text-danger" : "text-brand"}`} />
-                    <span className="text-sm font-semibold">{cam.name}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    {isAlerting && (
-                      <span className="flex items-center gap-1 text-xs text-danger font-bold animate-pulse bg-danger/20 px-2 rounded">
-                        <AlertTriangle className="w-3 h-3" />
-                        {alertMessage}
-                      </span>
-                    )}
-                    <button className="p-1 hover:bg-white/10 rounded transition-colors">
-                      <Maximize2 className="w-4 h-4 text-white/70" />
-                    </button>
-                  </div>
-                </div>
-                
-                <div className="aspect-video bg-black/40 relative flex items-center justify-center overflow-hidden">
-                  <img 
-                    src={`data:image/jpeg;base64,${cam.data}`} 
-                    alt={cam.name}
-                    className="w-full h-full object-contain"
-                  />
-                  {isAlerting && (
-                    <div className="absolute inset-0 border-4 border-danger/50 z-20 pointer-events-none"></div>
-                  )}
-                </div>
-              </div>
-            );
-          })
+          cameras.map((cam) => (
+            <CameraFeedDisplay
+              key={cam.camera_id}
+              cam={cam}
+              isAlerting={alertCam === cam.camera_id}
+              alertMessage={alertMessage}
+            />
+          ))
         )}
       </div>
     </div>

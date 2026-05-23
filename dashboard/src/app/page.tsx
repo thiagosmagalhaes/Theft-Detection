@@ -5,6 +5,24 @@ import CameraGrid from "@/components/CameraGrid";
 import StatsCharts from "@/components/StatsCharts";
 import { Activity, Camera, ShieldAlert, Users } from "lucide-react";
 
+const formatLocalDateKey = (date: Date) =>
+  `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
+
+const getAlertDateKey = (timestamp: string) => {
+  if (!timestamp) return "";
+
+  if (/^\d{8}_\d{6}/.test(timestamp)) {
+    return timestamp.slice(0, 8);
+  }
+
+  const parsed = new Date(timestamp);
+  if (!Number.isNaN(parsed.getTime())) {
+    return formatLocalDateKey(parsed);
+  }
+
+  return timestamp.slice(0, 8);
+};
+
 export default function Home() {
   const [stats, setStats] = useState({
     activeCameras: "0/0",
@@ -32,9 +50,8 @@ export default function Home() {
         let todayAlertsCount = 0;
         if (histRes.ok) {
           const history = await histRes.json();
-          // history timestamp format YYYYMMDD_HHMMSS
-          const todayPrefix = new Date().toISOString().replace(/-/g, "").slice(0, 8);
-          todayAlertsCount = history.filter((h: any) => h.timestamp.startsWith(todayPrefix)).length;
+          const todayKey = formatLocalDateKey(new Date());
+          todayAlertsCount = history.filter((h: any) => getAlertDateKey(h.timestamp) === todayKey).length;
         }
 
         // Fetch Faces

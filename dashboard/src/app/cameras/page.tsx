@@ -128,9 +128,9 @@ export default function CamerasPage() {
     if (!ctx) return;
 
     const ZONE_COLOURS: Record<ZoneType, { fill: string; stroke: string; label: string }> = {
-      merchandise: { fill: "rgba(251,146,60,0.2)",  stroke: "#fb923c", label: "🛍️" },
-      forbidden:   { fill: "rgba(239,68,68,0.2)",   stroke: "#ef4444", label: "🚫" },
-      entry:       { fill: "rgba(34,197,94,0.2)",   stroke: "#22c55e", label: "🚪" },
+      merchandise: { fill: "rgba(251,146,60,0.2)", stroke: "#fb923c", label: "🛍️" },
+      forbidden: { fill: "rgba(239,68,68,0.2)", stroke: "#ef4444", label: "🚫" },
+      entry: { fill: "rgba(34,197,94,0.2)", stroke: "#22c55e", label: "🚪" },
     };
 
     const drawCanvas = () => {
@@ -283,7 +283,7 @@ export default function CamerasPage() {
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    
+
     const rect = canvas.getBoundingClientRect();
     const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
     const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
@@ -409,12 +409,11 @@ export default function CamerasPage() {
       </header>
 
       {message && (
-        <div 
-          className={`mb-6 p-4 rounded-lg flex items-center gap-3 border ${
-            message.type === "success" 
-              ? "bg-green-500/10 border-green-500/30 text-green-400" 
+        <div
+          className={`mb-6 p-4 rounded-lg flex items-center gap-3 border ${message.type === "success"
+              ? "bg-green-500/10 border-green-500/30 text-green-400"
               : "bg-danger/10 border-danger/30 text-danger"
-          }`}
+            }`}
         >
           {message.type === "success" ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
           <span className="text-sm font-medium">{message.text}</span>
@@ -435,8 +434,8 @@ export default function CamerasPage() {
             <form onSubmit={handleAddCamera} className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground/80">Camera Name</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={name}
                   onChange={e => setName(e.target.value)}
                   placeholder="e.g. Checkout Desk A"
@@ -453,8 +452,8 @@ export default function CamerasPage() {
                     Webcam index or RTSP url
                   </span>
                 </div>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={source}
                   onChange={e => setSource(e.target.value)}
                   placeholder="e.g. 0 or rtsp://username:pwd@ip:port/h264"
@@ -463,8 +462,8 @@ export default function CamerasPage() {
                 />
               </div>
 
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={submitting}
                 className="w-full mt-4 flex items-center justify-center gap-2 bg-brand hover:bg-brand/90 disabled:opacity-50 text-white py-2 rounded-lg font-medium transition-colors cursor-pointer"
               >
@@ -485,7 +484,7 @@ export default function CamerasPage() {
                 </div>
                 <h3 className="text-xl font-semibold">Active Camera Feeds</h3>
               </div>
-              <button 
+              <button
                 onClick={fetchCameras}
                 className="p-2 hover:bg-glass border border-glass-border rounded-lg text-foreground/60 hover:text-foreground transition-colors cursor-pointer"
                 title="Yenile"
@@ -501,28 +500,26 @@ export default function CamerasPage() {
             ) : (
               <div className="space-y-4">
                 {cameras.map(cam => (
-                  <div 
+                  <div
                     key={cam.id}
                     className="glass-panel p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-glass-border bg-black/20"
                   >
                     <div className="flex items-center gap-3">
-                      <div 
-                        className={`w-10 h-10 rounded-full flex items-center justify-center border ${
-                          cam.status === "active" 
-                            ? "bg-green-500/10 border-green-500/30 text-green-400" 
+                      <div
+                        className={`w-10 h-10 rounded-full flex items-center justify-center border ${cam.status === "active"
+                            ? "bg-green-500/10 border-green-500/30 text-green-400"
                             : "bg-danger/10 border-danger/30 text-danger"
-                        }`}
+                          }`}
                       >
                         <Camera className="w-5 h-5" />
                       </div>
                       <div>
                         <h4 className="font-semibold text-foreground flex items-center gap-2">
                           {cam.name}
-                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${
-                            cam.status === "active"
+                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${cam.status === "active"
                               ? "bg-green-500/10 border-green-500/20 text-green-400"
                               : "bg-danger/10 border-danger/20 text-danger"
-                          }`}>
+                            }`}>
                             {cam.status === "active" ? "Active" : "Offline / Error"}
                           </span>
                         </h4>
@@ -584,7 +581,7 @@ export default function CamerasPage() {
                 <h3 className="text-lg font-bold text-foreground">Editor de Zonas ROI</h3>
                 <p className="text-xs text-foreground/60">{selectedCam.name} ({selectedCam.source})</p>
               </div>
-              <button 
+              <button
                 onClick={() => setSelectedCam(null)}
                 className="p-1.5 hover:bg-white/10 rounded-lg text-foreground/70 hover:text-foreground transition-colors cursor-pointer"
               >
@@ -600,8 +597,8 @@ export default function CamerasPage() {
                   <div className="space-y-1.5">
                     {([
                       { type: "merchandise" as ZoneType, icon: "🛍️", label: "Área de Mercadoria", colour: "text-orange-400 bg-orange-500/10 border-orange-500/25" },
-                      { type: "forbidden"   as ZoneType, icon: "🚫", label: "Zona Proibida",       colour: "text-red-400 bg-red-500/10 border-red-500/25" },
-                      { type: "entry"       as ZoneType, icon: "🚪", label: "Entrada / Balcão",    colour: "text-green-400 bg-green-500/10 border-green-500/25" },
+                      { type: "forbidden" as ZoneType, icon: "🚫", label: "Zona Proibida", colour: "text-red-400 bg-red-500/10 border-red-500/25" },
+                      { type: "entry" as ZoneType, icon: "🚪", label: "Entrada / Balcão", colour: "text-green-400 bg-green-500/10 border-green-500/25" },
                     ]).map(({ type, icon, label, colour }) => (
                       <button
                         key={type}
@@ -624,8 +621,8 @@ export default function CamerasPage() {
                   {roiZones.map((zone, idx) => {
                     const colourMap: Record<ZoneType, string> = {
                       merchandise: "border-orange-500/40 bg-orange-500/8 text-orange-300",
-                      forbidden:   "border-red-500/40 bg-red-500/8 text-red-300",
-                      entry:       "border-green-500/40 bg-green-500/8 text-green-300",
+                      forbidden: "border-red-500/40 bg-red-500/8 text-red-300",
+                      entry: "border-green-500/40 bg-green-500/8 text-green-300",
                     };
                     const iconMap: Record<ZoneType, string> = {
                       merchandise: "🛍️", forbidden: "🚫", entry: "🚪",
@@ -676,8 +673,8 @@ export default function CamerasPage() {
                   <p className="text-[10px] text-foreground/40 font-semibold uppercase tracking-wider mb-1">Legenda</p>
                   {[
                     { colour: "bg-orange-400", label: "Mercadoria — ativa scoring" },
-                    { colour: "bg-red-400",    label: "Proibida — alerta imediato" },
-                    { colour: "bg-green-400",  label: "Entrada — sem pontuação" },
+                    { colour: "bg-red-400", label: "Proibida — alerta imediato" },
+                    { colour: "bg-green-400", label: "Entrada — sem pontuação" },
                   ].map(({ colour, label }) => (
                     <div key={label} className="flex items-center gap-2 text-[10px] text-foreground/50">
                       <span className={`w-2.5 h-2.5 rounded-sm flex-shrink-0 ${colour}`} />
@@ -733,13 +730,13 @@ export default function CamerasPage() {
                 {roiZones.filter(z => z.points.length >= 3).length} de {roiZones.length} zona(s) prontas para salvar
               </p>
               <div className="flex items-center gap-2">
-                <button 
+                <button
                   onClick={() => setSelectedCam(null)}
                   className="px-4 py-2 border border-glass-border hover:bg-glass rounded-lg text-sm font-semibold transition-colors cursor-pointer text-foreground/80 hover:text-foreground"
                 >
                   Cancelar
                 </button>
-                <button 
+                <button
                   onClick={handleSaveRoi}
                   disabled={roiZones.filter(z => z.points.length >= 3).length === 0}
                   className="px-6 py-2 bg-brand hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-bold transition-colors cursor-pointer"

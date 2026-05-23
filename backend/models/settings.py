@@ -1,6 +1,7 @@
 """Settings data model"""
 
 from pydantic import BaseModel
+from typing import Literal
 
 
 class SettingsModel(BaseModel):
@@ -15,6 +16,13 @@ class SettingsModel(BaseModel):
     telegramChatId: str = ""
     roiPoints: list[list[int]] = []
     showHeatmap: bool = False
+
+
+class RoiZone(BaseModel):
+    """A named polygon zone with a type that determines scoring behaviour."""
+    name: str = "Zona"
+    zone_type: Literal["merchandise", "forbidden", "entry"] = "merchandise"
+    points: list[list[int]] = []
 
 
 class CameraInput(BaseModel):

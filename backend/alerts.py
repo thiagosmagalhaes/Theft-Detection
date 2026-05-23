@@ -3,6 +3,7 @@
 import cv2
 import os
 import smtplib
+import subprocess
 import threading
 import time
 from datetime import datetime, timedelta
@@ -17,12 +18,16 @@ from .database import insert_alert
 
 
 def _build_video_writer(video_path, fps, width, height):
-    """Create VideoWriter prioritizing browser-friendly codecs for HTML5 playback."""
+    """Create VideoWriter with browser-compatible H.264 codec.
+    
+    Uses a temporary file that will be converted to H.264 MP4 using FFmpeg
+    for guaranteed browser compatibility.
+    """
+    # Try direct H.264 encoding first (works if OpenCV is built with proper codecs)
     codec_candidates = [
         ("avc1", "H.264/AVC"),
         ("H264", "H.264"),
         ("X264", "x264"),
-        ("mp4v", "MPEG-4 Part 2"),
     ]
 
     for fourcc_code, codec_name in codec_candidates:
@@ -30,11 +35,96 @@ def _build_video_writer(video_path, fps, width, height):
         writer = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
         if writer.isOpened():
             print(f"[ALERT] Video codec selected: {fourcc_code} ({codec_name})")
-            if fourcc_code == "mp4v":
-                print("[ALERT] Warning: mp4v may fail in some browsers. Prefer avc1/H264 if available.")
+            return writer
+
+    # Fallback: use any working codec, will convert with FFmpeg later
+    print("[ALERT] H.264 codec not available, using fallback (will convert with FFmpeg)")
+    fallback_codecs = [("mp4v", "MPEG-4"), ("XVID", "Xvid")]
+    
+    for fourcc_code, codec_name in fallback_codecs:
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_code)
+        writer = cv2.VideoWriter(video_path + ".tmp", fourcc, fps, (width, height))
+        if writer.isOpened():
+            print(f"[ALERT] Temporary codec: {fourcc_code} ({codec_name})")
             return writer
 
     return None
+
+
+def _convert_to_browser_compatible_mp4(input_path, output_path):
+    """Convert video to browser-compatible MP4 with H.264 video and AAC audio.
+    
+    Args:
+        input_path: Path to input video file
+        output_path: Path to output MP4 file
+        
+    Returns:
+        bool: True if conversion succeeded, False otherwise
+    """
+    try:
+        # Check if ffmpeg is available
+        try:
+            subprocess.run(
+                ["ffmpeg", "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                check=True
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            print("[ALERT] FFmpeg not found. Install FFmpeg for guaranteed browser compatibility.")
+            print("[ALERT] Using original video file without conversion.")
+            # If input is .tmp file, rename it to final output
+            if input_path.endswith(".tmp"):
+                if os.path.exists(input_path):
+                    os.rename(input_path, output_path)
+            return False
+
+        # Convert to H.264 MP4 (silent video - OpenCV doesn't capture audio anyway)
+        # Using web-optimized settings:
+        # - H.264 codec (libx264) with baseline profile for maximum compatibility
+        # - Constant Rate Factor (CRF) 23 for good quality/size balance
+        # - faststart flag moves metadata to beginning for streaming
+        # - pixel format yuv420p for maximum compatibility
+        cmd = [
+            "ffmpeg",
+            "-y",  # Overwrite output file if exists
+            "-i", input_path,  # Input file
+            "-c:v", "libx264",  # H.264 video codec
+            "-preset", "fast",  # Encoding speed preset
+            "-crf", "23",  # Quality (lower = better, 23 is default)
+            "-profile:v", "baseline",  # Baseline profile for maximum compatibility
+            "-level", "3.0",  # H.264 level
+            "-pix_fmt", "yuv420p",  # Pixel format (required for some players)
+            "-movflags", "+faststart",  # Enable streaming/progressive download
+            "-an",  # No audio (OpenCV doesn't capture audio)
+            output_path
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=True
+        )
+        
+        # Clean up temporary file
+        if input_path.endswith(".tmp") and os.path.exists(input_path):
+            os.remove(input_path)
+            
+        print(f"[ALERT] Video converted to browser-compatible H.264 MP4: {output_path}")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        print("[ALERT] FFmpeg conversion timed out")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"[ALERT] FFmpeg conversion failed: {e.stderr.decode() if e.stderr else str(e)}")
+        return False
+    except Exception as e:
+        print(f"[ALERT] Video conversion error: {e}")
+        return False
 
 
 def _save_alert_video(video_path, frame_buffer, event_time):
@@ -82,7 +172,14 @@ def _save_alert_video(video_path, frame_buffer, event_time):
         except Exception:
             pass
 
+        # Check if we need a temporary file for conversion
+        temp_path = None
         out = _build_video_writer(video_path, fps, width, height)
+        
+        # If writer opened a .tmp file, we'll need to convert it
+        if out is not None and os.path.exists(video_path + ".tmp"):
+            temp_path = video_path + ".tmp"
+        
         if out is None:
             print("[ALERT] Could not open VideoWriter with any supported codec.")
             return False
@@ -96,6 +193,12 @@ def _save_alert_video(video_path, frame_buffer, event_time):
             out.write(frame)
 
         out.release()
+        
+        # If we used a temporary file, convert to browser-compatible MP4
+        if temp_path and os.path.exists(temp_path):
+            print(f"[ALERT] Converting video to browser-compatible MP4...")
+            _convert_to_browser_compatible_mp4(temp_path, video_path)
+        
         print(f"[ALERT] Video saved: {video_path} ({len(selected_frames)} frames, ~30s window)")
         return True
 

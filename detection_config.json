@@ -1,0 +1,17 @@
+{
+  "roiTypes": {
+    "merchandiseZone": true,
+    "forbiddenZone": true,
+    "entryCounterZone": true
+  },
+  "merchandiseTrigger": "hand_in_roi",
+  "bagClassification": "only_if_tracked_item",
+  "bagArrivalFrames": 30,
+  "hiddenFaceBehavior": "only_if_nape",
+  "bagStrapSuppression": "full",
+  "entryZoneBehavior": "no_score",
+  "alertChain": "confirmed_chain_only",
+  "highScoreThreshold": 2.0,
+  "preAlertLabel": "atencao_revisar",
+  "confirmedAlertLabel": "ocultacao_confirmada"
+}

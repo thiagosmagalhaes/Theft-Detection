@@ -1,7 +1,18 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Camera, Plus, Trash2, Edit, Loader2, AlertCircle, CheckCircle, X, RefreshCw, HelpCircle } from "lucide-react";
+import { Camera, Plus, Trash2, Edit, Loader2, AlertCircle, CheckCircle, X, RefreshCw, HelpCircle, Sliders, MapPin } from "lucide-react";
+import DetectionSetupWizard, { DetectionConfig } from "@/components/DetectionSetupWizard";
+
+// ── Types ─────────────────────────────────────────────────────────────────
+
+type ZoneType = "merchandise" | "forbidden" | "entry";
+
+interface RoiZone {
+  name: string;
+  zone_type: ZoneType;
+  points: number[][];
+}
 
 interface CameraData {
   id: string;
@@ -9,6 +20,7 @@ interface CameraData {
   source: string;
   status: "active" | "error";
   roi_points: number[][];
+  roi_zones: RoiZone[];
 }
 
 interface CameraFeed {
@@ -29,7 +41,9 @@ export default function CamerasPage() {
 
   // ROI Canvas Drawer Modal States
   const [selectedCam, setSelectedCam] = useState<CameraData | null>(null);
-  const [roiPoints, setRoiPoints] = useState<number[][]>([]);
+  // Multi-zone state
+  const [roiZones, setRoiZones] = useState<RoiZone[]>([]);
+  const [activeZoneIdx, setActiveZoneIdx] = useState<number>(0); // which zone is being drawn
   const [activeFrameBase64, setActiveFrameBase64] = useState<string | null>(null);
   const [frameResolution, setFrameResolution] = useState<{ width: number; height: number }>({
     width: 1280,
@@ -38,6 +52,8 @@ export default function CamerasPage() {
   const wsRef = useRef<WebSocket | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
+  const [detectionConfig, setDetectionConfig] = useState<DetectionConfig | null>(null);
 
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const getWebSocketUrl = () => {
@@ -111,11 +127,15 @@ export default function CamerasPage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const ZONE_COLOURS: Record<ZoneType, { fill: string; stroke: string; label: string }> = {
+      merchandise: { fill: "rgba(251,146,60,0.2)",  stroke: "#fb923c", label: "🛍️" },
+      forbidden:   { fill: "rgba(239,68,68,0.2)",   stroke: "#ef4444", label: "🚫" },
+      entry:       { fill: "rgba(34,197,94,0.2)",   stroke: "#22c55e", label: "🚪" },
+    };
 
     const drawCanvas = () => {
-      // 1. Draw live camera frame OR placeholder background
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
       if (activeFrameBase64) {
         const img = new Image();
         img.src = `data:image/jpeg;base64,${activeFrameBase64}`;
@@ -128,63 +148,70 @@ export default function CamerasPage() {
             );
           }
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          drawPolygon();
+          drawAllZones();
         };
       } else {
-        // Dark placeholder
         ctx.fillStyle = "#151824";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-        ctx.font = "20px var(--font-geist-sans), sans-serif";
+        ctx.fillStyle = "rgba(255,255,255,0.4)";
+        ctx.font = "20px sans-serif";
         ctx.textAlign = "center";
         ctx.fillText("Surveillance Feed Loading...", canvas.width / 2, canvas.height / 2 - 10);
-        ctx.font = "14px var(--font-geist-sans), sans-serif";
+        ctx.font = "14px sans-serif";
         ctx.fillText("(Ensure backend is active & transmitting live stream)", canvas.width / 2, canvas.height / 2 + 20);
-        
-        drawPolygon();
+        drawAllZones();
       }
     };
 
-    const drawPolygon = () => {
-      if (roiPoints.length === 0) return;
+    const drawAllZones = () => {
+      roiZones.forEach((zone, zIdx) => {
+        if (zone.points.length === 0) return;
+        const colours = ZONE_COLOURS[zone.zone_type];
+        const isActive = zIdx === activeZoneIdx;
 
-      // Draw lines
-      ctx.beginPath();
-      ctx.moveTo(roiPoints[0][0], roiPoints[0][1]);
-      for (let i = 1; i < roiPoints.length; i++) {
-        ctx.lineTo(roiPoints[i][0], roiPoints[i][1]);
-      }
-      
-      // Close path visually
-      ctx.closePath();
-
-      // Style polygon fill & border
-      ctx.fillStyle = "rgba(59, 130, 246, 0.25)";
-      ctx.fill();
-      ctx.strokeStyle = "#3b82f6";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      // Draw anchor points
-      roiPoints.forEach((pt, index) => {
         ctx.beginPath();
-        ctx.arc(pt[0], pt[1], 6, 0, 2 * Math.PI);
-        ctx.fillStyle = "#ffffff";
+        ctx.moveTo(zone.points[0][0], zone.points[0][1]);
+        for (let i = 1; i < zone.points.length; i++) {
+          ctx.lineTo(zone.points[i][0], zone.points[i][1]);
+        }
+        ctx.closePath();
+        ctx.fillStyle = colours.fill;
         ctx.fill();
-        ctx.strokeStyle = "#3b82f6";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = colours.stroke;
+        ctx.lineWidth = isActive ? 3 : 1.5;
+        ctx.setLineDash(isActive ? [] : [6, 3]);
         ctx.stroke();
-        
-        // Point labels
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 12px sans-serif";
-        ctx.fillText((index + 1).toString(), pt[0] + 10, pt[1] - 5);
+        ctx.setLineDash([]);
+
+        // Zone name label
+        const minX = Math.min(...zone.points.map((p) => p[0]));
+        const minY = Math.min(...zone.points.map((p) => p[1]));
+        ctx.fillStyle = colours.stroke;
+        ctx.font = "bold 13px sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(`${colours.label} ${zone.name}`, minX + 4, minY - 6);
+
+        // Draw anchor dots for the active zone only (so it's clear which one you're editing)
+        if (isActive) {
+          zone.points.forEach((pt, idx) => {
+            ctx.beginPath();
+            ctx.arc(pt[0], pt[1], 6, 0, 2 * Math.PI);
+            ctx.fillStyle = "#ffffff";
+            ctx.fill();
+            ctx.strokeStyle = colours.stroke;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 11px sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText((idx + 1).toString(), pt[0] + 9, pt[1] - 5);
+          });
+        }
       });
     };
 
     drawCanvas();
-  }, [roiPoints, activeFrameBase64, selectedCam]);
+  }, [roiZones, activeZoneIdx, activeFrameBase64, selectedCam]);
 
   const handleAddCamera = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -258,43 +285,91 @@ export default function CamerasPage() {
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    // Scale standard mouse clicks exactly to 1280x720 video frames
     const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
     const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
 
-    setRoiPoints(prev => [...prev, [x, y]]);
+    setRoiZones((prev) => {
+      const updated = [...prev];
+      if (updated.length === 0) return prev; // no zone selected yet
+      updated[activeZoneIdx] = {
+        ...updated[activeZoneIdx],
+        points: [...updated[activeZoneIdx].points, [x, y]],
+      };
+      return updated;
+    });
   };
 
-  const clearRoiPoints = () => {
-    setRoiPoints([]);
+  const clearActiveZonePoints = () => {
+    setRoiZones((prev) => {
+      const updated = [...prev];
+      if (updated[activeZoneIdx]) {
+        updated[activeZoneIdx] = { ...updated[activeZoneIdx], points: [] };
+      }
+      return updated;
+    });
+  };
+
+  const addNewZone = (type: ZoneType) => {
+    const labels: Record<ZoneType, string> = {
+      merchandise: "Área de Mercadoria",
+      forbidden: "Zona Proibida",
+      entry: "Entrada / Balcão",
+    };
+    const newZone: RoiZone = { name: labels[type], zone_type: type, points: [] };
+    setRoiZones((prev) => {
+      const updated = [...prev, newZone];
+      setActiveZoneIdx(updated.length - 1);
+      return updated;
+    });
+  };
+
+  const removeZone = (idx: number) => {
+    setRoiZones((prev) => {
+      const updated = prev.filter((_, i) => i !== idx);
+      setActiveZoneIdx(Math.max(0, Math.min(activeZoneIdx, updated.length - 1)));
+      return updated;
+    });
   };
 
   const openRoiModal = (cam: CameraData) => {
     setSelectedCam(cam);
-    setRoiPoints(cam.roi_points || []);
+    // Load existing zones; fall back to legacy roi_points as a merchandise zone
+    const existingZones: RoiZone[] = cam.roi_zones && cam.roi_zones.length > 0
+      ? cam.roi_zones
+      : cam.roi_points && cam.roi_points.length >= 3
+        ? [{ name: "Área de Mercadoria", zone_type: "merchandise", points: cam.roi_points }]
+        : [];
+    setRoiZones(existingZones);
+    setActiveZoneIdx(0);
     setFrameResolution({ width: 1280, height: 720 });
   };
 
   const handleSaveRoi = async () => {
     if (!selectedCam) return;
+    // Validate at least one complete zone (≥3 points)
+    const validZones = roiZones.filter((z) => z.points.length >= 3);
+    if (validZones.length === 0) {
+      alert("Desenhe pelo menos uma zona com 3 ou mais pontos antes de salvar.");
+      return;
+    }
     try {
-      const res = await fetch(`${apiBaseUrl}/cameras/${selectedCam.id}/roi`, {
+      const res = await fetch(`${apiBaseUrl}/cameras/${selectedCam.id}/roi-zones`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ points: roiPoints }),
+        body: JSON.stringify({ zones: validZones }),
       });
       const data = await res.json();
 
       if (res.ok && data.status === "success") {
-        setMessage({ text: "Region of Interest (ROI) coordinates saved successfully!", type: "success" });
+        setMessage({ text: "Zonas de ROI salvas com sucesso!", type: "success" });
         setSelectedCam(null);
         await fetchCameras();
       } else {
-        alert(data.detail || "Failed to save ROI.");
+        alert(data.detail || "Falha ao salvar zonas.");
       }
     } catch (err) {
       console.error(err);
-      alert("Network error while saving ROI.");
+      alert("Erro de rede ao salvar zonas.");
     }
   };
 
@@ -309,10 +384,28 @@ export default function CamerasPage() {
   return (
     <div className="max-w-6xl mx-auto pb-10">
       <header className="mb-8">
-        <h2 className="text-3xl font-bold tracking-tight mb-2">Camera Setup & Configuration</h2>
-        <p className="text-foreground/60">
-          Manage dynamic USB index/RTSP streams and define camera-specific Regions of Interest (ROI) interactively.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight mb-2">Camera Setup & Configuration</h2>
+            <p className="text-foreground/60">
+              Manage dynamic USB index/RTSP streams and define camera-specific Regions of Interest (ROI) interactively.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowWizard(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand/15 border border-brand/30 text-brand hover:bg-brand/25 transition-colors text-sm font-semibold flex-shrink-0 shadow-sm"
+          >
+            <Sliders className="w-4 h-4" />
+            Configurar Detecção
+          </button>
+        </div>
+        {detectionConfig && (
+          <div className="mt-3 flex items-center gap-2 text-xs text-green-400">
+            <CheckCircle className="w-3.5 h-3.5" />
+            Configuração de detecção salva
+            <button onClick={() => setShowWizard(true)} className="underline hover:no-underline text-green-400/70">Editar</button>
+          </div>
+        )}
       </header>
 
       {message && (
@@ -435,9 +528,11 @@ export default function CamerasPage() {
                         </h4>
                         <p className="text-xs text-foreground/50 mt-1 font-mono">Source: {cam.source}</p>
                         <p className="text-xs text-brand font-medium mt-1">
-                          {cam.roi_points && cam.roi_points.length > 0 
-                            ? `✓ Region of Interest (ROI) configured: ${cam.roi_points.length} points`
-                            : "⚠️ No ROI configured. Entire screen monitored."}
+                          {(cam.roi_zones && cam.roi_zones.length > 0)
+                            ? `✓ ${cam.roi_zones.length} zona(s) ROI configurada(s): ${cam.roi_zones.map(z => z.name).join(", ")}`
+                            : cam.roi_points && cam.roi_points.length > 0
+                              ? `✓ ROI legado: ${cam.roi_points.length} pontos`
+                              : "⚠️ Sem ROI configurado. Tela inteira monitorada."}
                         </p>
                       </div>
                     </div>
@@ -466,14 +561,27 @@ export default function CamerasPage() {
         </div>
       </div>
 
+      {/* Detection Setup Wizard */}
+      {showWizard && (
+        <DetectionSetupWizard
+          apiBaseUrl={apiBaseUrl}
+          onClose={() => setShowWizard(false)}
+          onSave={(cfg) => {
+            setDetectionConfig(cfg);
+            setShowWizard(false);
+          }}
+          initialConfig={detectionConfig ?? undefined}
+        />
+      )}
+
       {/* ROI Drawing Canvas Modal */}
       {selectedCam && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-all duration-300">
-          <div className="glass-panel w-full max-w-4xl overflow-hidden border border-glass-border shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
+          <div className="glass-panel w-full max-w-5xl overflow-hidden border border-glass-border shadow-2xl relative">
             {/* Modal Header */}
             <div className="glass-header px-6 py-4 flex justify-between items-center">
               <div>
-                <h3 className="text-lg font-bold text-foreground">Interactive ROI Canvas Drawer</h3>
+                <h3 className="text-lg font-bold text-foreground">Editor de Zonas ROI</h3>
                 <p className="text-xs text-foreground/60">{selectedCam.name} ({selectedCam.source})</p>
               </div>
               <button 
@@ -484,53 +592,159 @@ export default function CamerasPage() {
               </button>
             </div>
 
-            {/* Modal Content */}
-            <div className="p-6 space-y-4">
-              <div className="p-3 bg-brand/10 border border-brand/20 text-brand rounded-lg text-xs flex items-start gap-2 leading-relaxed">
-                <HelpCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>
-                  <strong>Nasıl ROI Çizilir:</strong> Canlı görüntü üzerine fareyle tıklayarak polygon noktalarını yerleştirin. Noktaları sırasıyla birleştiren çizgiler oluşacaktır. En az 3 nokta yerleştirerek loitering (bekleme) ve yasaklı alan bölgesi tanımlayabilirsiniz. Tamamlandığında <strong>Save ROI coordinates</strong> butonuna tıklayın.
-                </span>
+            <div className="flex gap-0 h-[calc(100vh-12rem)] max-h-[680px]">
+              {/* Left sidebar: zone list */}
+              <div className="w-64 flex-shrink-0 border-r border-white/8 flex flex-col">
+                <div className="p-4 border-b border-white/8">
+                  <p className="text-xs font-semibold text-foreground/60 uppercase tracking-wider mb-3">Zonas Definidas</p>
+                  <div className="space-y-1.5">
+                    {([
+                      { type: "merchandise" as ZoneType, icon: "🛍️", label: "Área de Mercadoria", colour: "text-orange-400 bg-orange-500/10 border-orange-500/25" },
+                      { type: "forbidden"   as ZoneType, icon: "🚫", label: "Zona Proibida",       colour: "text-red-400 bg-red-500/10 border-red-500/25" },
+                      { type: "entry"       as ZoneType, icon: "🚪", label: "Entrada / Balcão",    colour: "text-green-400 bg-green-500/10 border-green-500/25" },
+                    ]).map(({ type, icon, label, colour }) => (
+                      <button
+                        key={type}
+                        onClick={() => addNewZone(type)}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-colors hover:brightness-125 ${colour}`}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        {icon} {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                  {roiZones.length === 0 && (
+                    <p className="text-xs text-foreground/35 text-center pt-4 leading-relaxed">
+                      Clique nos botões acima para adicionar zonas, depois clique no vídeo para desenhar os pontos.
+                    </p>
+                  )}
+                  {roiZones.map((zone, idx) => {
+                    const colourMap: Record<ZoneType, string> = {
+                      merchandise: "border-orange-500/40 bg-orange-500/8 text-orange-300",
+                      forbidden:   "border-red-500/40 bg-red-500/8 text-red-300",
+                      entry:       "border-green-500/40 bg-green-500/8 text-green-300",
+                    };
+                    const iconMap: Record<ZoneType, string> = {
+                      merchandise: "🛍️", forbidden: "🚫", entry: "🚪",
+                    };
+                    const isActive = idx === activeZoneIdx;
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => setActiveZoneIdx(idx)}
+                        className={`w-full text-left rounded-lg border p-3 transition-all ${colourMap[zone.zone_type]} ${isActive ? "ring-2 ring-white/30 brightness-125" : "opacity-70 hover:opacity-100"}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold truncate">
+                            {iconMap[zone.zone_type]} {zone.name}
+                          </span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); removeZone(idx); }}
+                            className="p-0.5 hover:text-red-400 text-foreground/40 transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[10px] mt-1 text-foreground/50">
+                          {zone.points.length} {zone.points.length === 1 ? "ponto" : "pontos"}
+                          {zone.points.length < 3 && zone.points.length > 0 && (
+                            <span className="text-amber-400"> · precisa de {3 - zone.points.length} mais</span>
+                          )}
+                          {zone.points.length === 0 && <span className="text-foreground/35"> · clique no vídeo</span>}
+                        </p>
+                        {isActive && zone.points.length > 0 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); clearActiveZonePoints(); }}
+                            className="mt-1.5 text-[10px] text-foreground/40 hover:text-red-400 transition-colors"
+                          >
+                            Limpar pontos
+                          </button>
+                        )}
+                        {isActive && (
+                          <p className="mt-1 text-[10px] font-semibold text-white/60">✏️ Editando</p>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Legend */}
+                <div className="p-3 border-t border-white/8 space-y-1">
+                  <p className="text-[10px] text-foreground/40 font-semibold uppercase tracking-wider mb-1">Legenda</p>
+                  {[
+                    { colour: "bg-orange-400", label: "Mercadoria — ativa scoring" },
+                    { colour: "bg-red-400",    label: "Proibida — alerta imediato" },
+                    { colour: "bg-green-400",  label: "Entrada — sem pontuação" },
+                  ].map(({ colour, label }) => (
+                    <div key={label} className="flex items-center gap-2 text-[10px] text-foreground/50">
+                      <span className={`w-2.5 h-2.5 rounded-sm flex-shrink-0 ${colour}`} />
+                      {label}
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              {/* Responsive 1280x720 Canvas */}
-              <div className="aspect-video w-full bg-black/60 rounded-lg overflow-hidden border border-glass-border relative flex items-center justify-center">
-                <canvas
-                  ref={canvasRef}
-                  width={frameResolution.width}
-                  height={frameResolution.height}
-                  onClick={handleCanvasClick}
-                  className="w-full h-auto aspect-video cursor-crosshair object-contain"
-                />
-              </div>
-
-              <div className="flex justify-between items-center text-xs text-foreground/50 px-1">
-                <span>Coordinates: [{roiPoints.map(p => `(${p[0]},${p[1]})`).join(", ")}]</span>
-                <span>Points count: {roiPoints.length}</span>
+              {/* Canvas area */}
+              <div className="flex-1 flex flex-col min-w-0">
+                {roiZones.length > 0 && (
+                  <div className="px-4 pt-3 pb-2 border-b border-white/8 flex items-center gap-2 text-xs">
+                    <MapPin className="w-3.5 h-3.5 text-brand" />
+                    <span>
+                      Clique no vídeo para adicionar pontos à zona{" "}
+                      <strong className="text-foreground">
+                        {roiZones[activeZoneIdx]?.name || "—"}
+                      </strong>
+                    </span>
+                  </div>
+                )}
+                {roiZones.length === 0 && (
+                  <div className="px-4 pt-3 pb-2 border-b border-white/8">
+                    <div className="flex items-center gap-2 p-2 rounded-lg bg-brand/8 border border-brand/20 text-brand text-xs">
+                      <HelpCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                      Adicione uma zona na lateral esquerda, depois clique no vídeo para desenhar o polígono.
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 p-4 flex items-center justify-center bg-black/20">
+                  <div className="w-full aspect-video bg-black/60 rounded-lg overflow-hidden border border-glass-border relative">
+                    <canvas
+                      ref={canvasRef}
+                      width={frameResolution.width}
+                      height={frameResolution.height}
+                      onClick={roiZones.length > 0 ? handleCanvasClick : undefined}
+                      className={`w-full h-full object-contain ${roiZones.length > 0 ? "cursor-crosshair" : "cursor-default"}`}
+                    />
+                  </div>
+                </div>
+                <div className="px-4 pb-3 text-[10px] text-foreground/35 text-right">
+                  {roiZones[activeZoneIdx]
+                    ? `Zona ativa: ${roiZones[activeZoneIdx].name} · ${roiZones[activeZoneIdx].points.length} pontos`
+                    : "Nenhuma zona selecionada"}
+                </div>
               </div>
             </div>
 
             {/* Modal Footer */}
             <div className="glass-header border-t border-b-0 px-6 py-4 flex justify-between items-center gap-4">
-              <button 
-                onClick={clearRoiPoints}
-                className="px-4 py-2 border border-glass-border hover:bg-glass rounded-lg text-sm font-semibold transition-colors cursor-pointer text-foreground/80 hover:text-foreground"
-              >
-                Clear Points
-              </button>
-              
+              <p className="text-xs text-foreground/40">
+                {roiZones.filter(z => z.points.length >= 3).length} de {roiZones.length} zona(s) prontas para salvar
+              </p>
               <div className="flex items-center gap-2">
                 <button 
                   onClick={() => setSelectedCam(null)}
                   className="px-4 py-2 border border-glass-border hover:bg-glass rounded-lg text-sm font-semibold transition-colors cursor-pointer text-foreground/80 hover:text-foreground"
                 >
-                  Cancel
+                  Cancelar
                 </button>
                 <button 
                   onClick={handleSaveRoi}
-                  className="px-6 py-2 bg-brand hover:bg-brand/90 text-white rounded-lg text-sm font-bold transition-colors cursor-pointer"
+                  disabled={roiZones.filter(z => z.points.length >= 3).length === 0}
+                  className="px-6 py-2 bg-brand hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-bold transition-colors cursor-pointer"
                 >
-                  Save ROI Coordinates
+                  Salvar Zonas ROI
                 </button>
               </div>
             </div>

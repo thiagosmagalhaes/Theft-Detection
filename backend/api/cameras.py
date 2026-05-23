@@ -2,7 +2,7 @@
 
 import asyncio
 from fastapi import APIRouter, HTTPException
-from ..models.settings import CameraInput
+from ..models.settings import CameraInput, RoiZone
 
 router = APIRouter()
 
@@ -123,3 +123,64 @@ async def get_camera_roi(camera_id: str):
             raw_points = camera_manager.cameras[camera_id].get("roi_points", [])
             return {"points": _normalize_roi_points(raw_points)}
     raise HTTPException(status_code=404, detail="Camera not found")
+
+
+# ---------------------------------------------------------------------------
+# Multi-zone ROI endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/cameras/{camera_id}/roi-zones")
+async def get_camera_roi_zones(camera_id: str):
+    """Get all named ROI zones for a camera."""
+    from ..video.video_loop import camera_manager
+
+    with camera_manager.lock:
+        if camera_id not in camera_manager.cameras:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        zones = camera_manager.cameras[camera_id].get("roi_zones", [])
+    return {"zones": zones}
+
+
+@router.post("/cameras/{camera_id}/roi-zones")
+async def save_camera_roi_zones(camera_id: str, payload: dict):
+    """Replace all ROI zones for a camera.
+
+    Expected body: {"zones": [{"name": str, "zone_type": str, "points": [[x,y],...]}]}
+    """
+    from ..video.video_loop import camera_manager
+
+    raw_zones = payload.get("zones")
+    if not isinstance(raw_zones, list):
+        raise HTTPException(status_code=400, detail="'zones' must be a list")
+
+    validated: list[dict] = []
+    allowed_types = {"merchandise", "forbidden", "entry"}
+    for z in raw_zones:
+        if not isinstance(z, dict):
+            continue
+        zone_type = z.get("zone_type", "merchandise")
+        if zone_type not in allowed_types:
+            zone_type = "merchandise"
+        pts = _normalize_roi_points(z.get("points", []))
+        if len(pts) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Zone '{z.get('name', '?')}' must have at least 3 points"
+            )
+        validated.append({
+            "name": str(z.get("name", "Zona"))[:60],
+            "zone_type": zone_type,
+            "points": pts,
+        })
+
+    camera_found = False
+    with camera_manager.lock:
+        if camera_id in camera_manager.cameras:
+            camera_manager.cameras[camera_id]["roi_zones"] = validated
+            camera_found = True
+
+    if not camera_found:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    await asyncio.to_thread(camera_manager.save_cameras)
+    return {"status": "success", "zones": validated}

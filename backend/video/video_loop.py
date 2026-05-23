@@ -27,7 +27,8 @@ from ..detection import (
     check_reaching,
     check_object_in_hand,
     check_concealment,
-    check_bending
+    check_bending,
+    is_person_facing_away
 )
 from ..alerts import trigger_alert
 
@@ -130,8 +131,25 @@ def video_loop():
                 name = cam_data["name"]
                 current_time = time.time()
                 
-                # Fetch specific camera ROI
+                # Fetch specific camera ROI (legacy single-zone)
                 cam_roi = normalize_roi_points(cam_data.get("roi_points", []))
+                # Multi-zone ROIs (new): list of dicts {zone_type, points}
+                raw_zones = cam_data.get("roi_zones", [])
+                merchandise_rois = [
+                    normalize_roi_points(z["points"])
+                    for z in raw_zones if z.get("zone_type") == "merchandise"
+                ]
+                forbidden_rois = [
+                    normalize_roi_points(z["points"])
+                    for z in raw_zones if z.get("zone_type") == "forbidden"
+                ]
+                entry_rois = [
+                    normalize_roi_points(z["points"])
+                    for z in raw_zones if z.get("zone_type") == "entry"
+                ]
+                # Fallback: treat legacy single roi_points as merchandise zone
+                if not merchandise_rois and cam_roi:
+                    merchandise_rois = [cam_roi]
                 
                 if cap.isOpened():
                     ret, frame = cap.read()
@@ -241,6 +259,7 @@ def video_loop():
 
                             # POSE & THEFT LOGIC
                             is_bending = check_bending(kpts)
+                            is_facing_away = is_person_facing_away(kpts)
                             
                             if not model_is_specialized:
                                 process_theft_detection(
@@ -249,26 +268,65 @@ def video_loop():
                                     current_time
                                 )
 
-                            # ROI LOGIC
-                            is_reaching, _ = check_reaching(kpts, cam_roi)
-                            if is_reaching:
-                                cv2.putText(frame, "RESTRICTED AREA ENT!", (box[0], box[1]-40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            # ROI LOGIC — zone-aware
+                            center_x = int((box[0] + box[2]) / 2)
+                            center_y = int((box[1] + box[3]) / 2)
+                            person_center = (center_x, center_y)
+
+                            # 1. Entry zone: person is in counter/entry → skip all scoring
+                            in_entry_zone = any(
+                                len(z) >= 3 and
+                                cv2.pointPolygonTest(np.array(z, dtype=np.int32), person_center, False) >= 0
+                                for z in entry_rois
+                            )
+
+                            # 2. Forbidden zone: immediate alert
+                            in_forbidden_zone = any(
+                                len(z) >= 3 and
+                                cv2.pointPolygonTest(np.array(z, dtype=np.int32), person_center, False) >= 0
+                                for z in forbidden_rois
+                            )
+
+                            # 3. Merchandise zones: hand inside → triggers scoring gate
+                            is_reaching = False
+                            for merch_roi in merchandise_rois:
+                                r, _ = check_reaching(kpts, merch_roi)
+                                if r:
+                                    is_reaching = True
+                                    break
+
+                            if in_entry_zone:
+                                # Person is at entry/counter — draw neutral label, no scoring
+                                cv2.putText(frame, "ENTRADA/BALCAO", (box[0], box[1]-10),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 100), 1)
+                            elif in_forbidden_zone:
+                                cv2.putText(frame, "ZONA PROIBIDA!", (box[0], box[1]-40),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                                 if current_time - cam_data["last_alert_time"] > ALERT_COOLDOWN:
                                     alert_payload_wrapper = {}
                                     frame_buffer = get_camera_buffer(cam_data)
-                                    trigger_alert(cam_id, name, "RESTRICTED AREA INTRUSION", frame, alert_payload_wrapper, frame_buffer)
+                                    trigger_alert(cam_id, name, "ZONA PROIBIDA - INTRUSAO", frame, alert_payload_wrapper, frame_buffer)
                                     cam_data["last_alert_time"] = current_time
                                     with lock:
                                         alert_payload = alert_payload_wrapper.get('data')
+                            elif is_reaching:
+                                cv2.putText(frame, "MERCADORIA - AREA MONITORADA", (box[0], box[1]-40),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
                             if is_bending:
                                 cv2.putText(frame, "BENDING", (box[0], box[1] + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
                             
-                            # LOITERING
-                            process_loitering(
-                                frame, box, cam_data, cam_id, name, 
-                                cam_roi, track_id, current_time
-                            )
+                            # Show when person is facing away (for debugging/transparency)
+                            if is_facing_away:
+                                cv2.putText(frame, "FACING AWAY", (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
+                            
+                            # LOITERING — only in merchandise zones, skip entry zones
+                            if not in_entry_zone:
+                                process_loitering(
+                                    frame, box, cam_data, cam_id, name, 
+                                    merchandise_rois[0] if merchandise_rois else cam_roi,
+                                    track_id, current_time
+                                )
 
                     # Apply heatmap overlay
                     frame = get_heatmap_overlay(cam_data, frame) 
@@ -278,8 +336,23 @@ def video_loop():
                         res_plotted = results_pose[0].plot()
                         frame = res_plotted
 
-                    # Draw ROI
-                    if len(cam_roi) > 0:
+                    # Draw all ROI zones with type-specific colours
+                    zone_colours = {
+                        "merchandise": (0, 200, 255),   # amber/orange
+                        "forbidden":   (0, 0, 220),     # red
+                        "entry":       (80, 200, 80),   # green
+                    }
+                    for z in raw_zones:
+                        pts = normalize_roi_points(z.get("points", []))
+                        if len(pts) >= 3:
+                            colour = zone_colours.get(z.get("zone_type", "merchandise"), (0, 200, 255))
+                            cv2.polylines(frame, [np.array(pts, dtype=np.int32)], isClosed=True, color=colour, thickness=2)
+                            # Label in top-left corner of zone bounding box
+                            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                            cv2.putText(frame, z.get("name", "Zona"), (min(xs), min(ys) - 6),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1)
+                    # Legacy single roi_points (if no zones defined)
+                    if not raw_zones and len(cam_roi) > 0:
                         cv2.polylines(frame, [np.array(cam_roi, dtype=np.int32)], isClosed=True, color=(0, 255, 255), thickness=2)
 
                 # Encode frame

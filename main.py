@@ -18,7 +18,8 @@ from backend.api import (
     cameras_router,
     faces_router,
     history_router,
-    stats_router
+    stats_router,
+    detection_config_router,
 )
 from backend.api.persons import router as persons_router
 video_runtime = importlib.import_module("backend.video.video_loop")
@@ -48,6 +49,7 @@ app.include_router(faces_router, tags=["faces"])
 app.include_router(history_router, tags=["history"])
 app.include_router(stats_router, tags=["stats"])
 app.include_router(persons_router, tags=["persons"])
+app.include_router(detection_config_router, tags=["detection-config"])
 
 
 @app.websocket("/ws")
